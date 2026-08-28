@@ -474,4 +474,49 @@ describe("workspace state", () => {
     await expect(access(worktreePath)).rejects.toThrow();
     await expect(access(join(repositoryPath, ".git"))).resolves.toBeUndefined();
   });
+
+  it("repairs link members after organizing the canonical repository", async () => {
+    const repositoryPath = join(sandbox, "legacy", "linked-before-move");
+    await execFileAsync("git", ["init", "-q", repositoryPath]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const repository = await manager.register({ path: repositoryPath });
+    const workspace = await manager.createWorkspace({ name: "Move Aware" });
+    await manager.addWorkspaceMember({
+      workspaceId: workspace.id,
+      repositoryId: repository.id,
+    });
+    const memberPath = join(workspace.absolutePath, repository.name);
+
+    const organized = await manager.organize(await manager.planOrganize(repository.id));
+
+    expect(await realpath(memberPath)).toBe(organized.absolutePath);
+    expect(await readlink(memberPath)).toBe(organized.absolutePath);
+  });
+
+  it("keeps an organized repository when a workspace link path has a conflict", async () => {
+    const repositoryPath = join(sandbox, "legacy", "conflicted-link");
+    await execFileAsync("git", ["init", "-q", repositoryPath]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const repository = await manager.register({ path: repositoryPath });
+    const workspace = await manager.createWorkspace({ name: "Conflict After Move" });
+    await manager.addWorkspaceMember({
+      workspaceId: workspace.id,
+      repositoryId: repository.id,
+    });
+    const memberPath = join(workspace.absolutePath, repository.name);
+    await unlink(memberPath);
+    await writeFile(memberPath, "do not overwrite\n");
+    const plan = await manager.planOrganize(repository.id);
+
+    await expect(manager.organize(plan)).rejects.toMatchObject({ code: "CONFLICT" });
+
+    await expect(access(plan.source)).rejects.toThrow();
+    await expect(access(join(plan.target, ".git"))).resolves.toBeUndefined();
+    await expect(readFile(memberPath, "utf8")).resolves.toBe("do not overwrite\n");
+    await expect(manager.search({ query: repository.name })).resolves.toMatchObject([
+      { absolutePath: await realpath(plan.target) },
+    ]);
+  });
 });

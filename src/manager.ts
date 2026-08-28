@@ -468,6 +468,27 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
     }
     const config = await readConfig(paths.config);
     await removeEmptySourceDirectories(currentPlan.source, config);
+    const workspaceIssues = [];
+    const workspaces = await searchWorkspaces(paths);
+    for (const workspace of workspaces) {
+      if (
+        workspace.members.some(
+          (member) => member.mode === "link" && member.repositoryId === updated.id,
+        )
+      ) {
+        const result = await syncWorkspace(paths, workspace.id);
+        workspaceIssues.push(
+          ...result.issues.map((issue) => ({ workspace: workspace.name, issue })),
+        );
+      }
+    }
+    if (workspaceIssues.length > 0) {
+      throw new CompulsiveError(
+        "CONFLICT",
+        "Repository was organized, but one or more workspace links could not be synchronized.",
+        workspaceIssues,
+      );
+    }
     return updated;
   }
 
