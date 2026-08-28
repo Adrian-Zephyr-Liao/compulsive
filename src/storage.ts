@@ -196,6 +196,8 @@ export async function readWorkspaceRegistry(path: string): Promise<WorkspaceRegi
   }
   const registry = value as WorkspaceRegistry;
   if (
+    new Set(registry.workspaces.map((workspace) => workspace.id)).size !==
+      registry.workspaces.length ||
     new Set(registry.workspaces.map((workspace) => workspace.name.toLowerCase())).size !==
       registry.workspaces.length ||
     new Set(registry.workspaces.map((workspace) => resolve(workspace.absolutePath))).size !==

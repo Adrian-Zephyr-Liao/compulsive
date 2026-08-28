@@ -182,12 +182,35 @@ async function createVerifiedLink(memberPath: string, repositoryPath: string): P
     );
   }
   if ((await realpath(memberPath)) !== target || (await readlink(memberPath)) !== target) {
-    await unlink(memberPath).catch(() => undefined);
+    await unlinkExpectedLink(memberPath, target).catch(() => undefined);
     throw new CompulsiveError(
       "FILESYSTEM_FAILED",
       `Unable to verify workspace link: ${memberPath}`,
     );
   }
+}
+
+async function unlinkExpectedLink(memberPath: string, target: string): Promise<void> {
+  const entry = await lstat(memberPath);
+  if (!entry.isSymbolicLink() || (await readlink(memberPath)) !== target) {
+    throw new CompulsiveError(
+      "CONFLICT",
+      `Workspace link changed before it could be removed: ${memberPath}`,
+    );
+  }
+  await unlink(memberPath);
+}
+
+async function runRollbacks(actions: Array<() => Promise<void>>): Promise<unknown[]> {
+  const errors: unknown[] = [];
+  for (const action of actions.reverse()) {
+    try {
+      await action();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  return errors;
 }
 
 async function verifyManagedLink(memberPath: string, repositoryPath: string): Promise<string> {
@@ -349,7 +372,7 @@ export async function addWorkspaceMember(
         await assertCleanWorktree(memberPath);
         await removeGitWorktree(repository.absolutePath, memberPath);
       } else {
-        await unlink(memberPath);
+        await unlinkExpectedLink(memberPath, await realpath(repository.absolutePath));
       }
     } catch (rollbackError) {
       throw new CompulsiveError(
@@ -388,7 +411,7 @@ export async function removeWorkspaceMember(
     await removeGitWorktree(repository.absolutePath, memberPath);
   } else {
     linkTarget = await verifyManagedLink(memberPath, repository.absolutePath);
-    await unlink(memberPath);
+    await unlinkExpectedLink(memberPath, linkTarget);
   }
   const updated: WorkspaceRecord = {
     ...workspace,
@@ -469,7 +492,7 @@ export async function syncWorkspace(
     }
     if (!(await pathEntryExists(memberPath))) {
       await createVerifiedLink(memberPath, expectedTarget);
-      rollbacks.push(() => unlink(memberPath));
+      rollbacks.push(() => unlinkExpectedLink(memberPath, expectedTarget));
       repaired.push(member.repositoryId);
       continue;
     }
@@ -495,10 +518,10 @@ export async function syncWorkspace(
       });
       continue;
     }
-    await unlink(memberPath);
+    await unlinkExpectedLink(memberPath, previousTarget);
     await createVerifiedLink(memberPath, expectedTarget);
     rollbacks.push(async () => {
-      await unlink(memberPath);
+      await unlinkExpectedLink(memberPath, expectedTarget);
       await symlink(previousTarget, memberPath);
     });
     repaired.push(member.repositoryId);
@@ -511,7 +534,14 @@ export async function syncWorkspace(
     try {
       await writeJsonAtomic(paths.workspaces, workspaceRegistry);
     } catch (error) {
-      for (const rollback of rollbacks.reverse()) await rollback().catch(() => undefined);
+      const rollbackErrors = await runRollbacks(rollbacks);
+      if (rollbackErrors.length > 0) {
+        throw new CompulsiveError(
+          "FILESYSTEM_FAILED",
+          "Workspace sync failed and one or more repaired links could not be restored.",
+          { cause: error, rollbackErrors },
+        );
+      }
       throw error;
     }
   }
@@ -547,7 +577,7 @@ export async function deleteWorkspace(paths: StoragePaths, id: WorkspaceId): Pro
   const removedWorktrees: Array<{ path: string; branch: string; repositoryPath: string }> = [];
   try {
     for (const link of links) {
-      await unlink(link.path);
+      await unlinkExpectedLink(link.path, link.target);
       removed.push(link);
     }
     for (const worktree of worktrees) {
@@ -557,13 +587,20 @@ export async function deleteWorkspace(paths: StoragePaths, id: WorkspaceId): Pro
     workspaceRegistry.workspaces.splice(index, 1);
     await writeJsonAtomic(paths.workspaces, workspaceRegistry);
   } catch (error) {
-    for (const worktree of removedWorktrees.reverse()) {
-      await addGitWorktree(worktree.repositoryPath, worktree.path, worktree.branch, false).catch(
-        () => undefined,
+    const rollbackErrors = await runRollbacks([
+      ...removed.map((link) => () => symlink(link.target, link.path)),
+      ...removedWorktrees.map(
+        (worktree) => () =>
+          addGitWorktree(worktree.repositoryPath, worktree.path, worktree.branch, false),
+      ),
+    ]);
+    if (rollbackErrors.length > 0) {
+      throw new CompulsiveError(
+        "FILESYSTEM_FAILED",
+        "Workspace deletion failed and one or more members could not be restored.",
+        { cause: error, rollbackErrors },
       );
     }
-    for (const link of removed.reverse())
-      await symlink(link.target, link.path).catch(() => undefined);
     throw error;
   }
 

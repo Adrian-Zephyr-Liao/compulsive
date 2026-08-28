@@ -90,6 +90,41 @@ describe("workspace state", () => {
     });
   });
 
+  it("rejects duplicate workspace identifiers in persisted state", async () => {
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const paths = createStoragePaths(dataDir);
+    const now = new Date().toISOString();
+    await writeFile(
+      paths.workspaces,
+      JSON.stringify({
+        schemaVersion: 1,
+        workspaces: [
+          {
+            id: "workspace:duplicate",
+            name: "First",
+            absolutePath: join(sandbox, "First"),
+            members: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: "workspace:duplicate",
+            name: "Second",
+            absolutePath: join(sandbox, "Second"),
+            members: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      }),
+    );
+
+    await expect(readWorkspaceRegistry(paths.workspaces)).rejects.toMatchObject({
+      code: "FILESYSTEM_FAILED",
+    });
+  });
+
   it("rejects a non-string workspace root in persisted configuration", async () => {
     await mkdir(dataDir, { recursive: true });
     await writeFile(
