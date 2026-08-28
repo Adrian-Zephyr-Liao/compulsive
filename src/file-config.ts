@@ -1,9 +1,7 @@
-import { constants } from "node:fs";
-import { access, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, parse, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 
-import { parseJSONC, type JSONCParseError } from "confbox/jsonc";
+import { createDefineConfig, loadConfig } from "c12";
 
 import { CompulsiveError } from "./errors.js";
 
@@ -29,34 +27,7 @@ export interface LoadCompulsiveConfigOptions {
   homeDir?: string;
 }
 
-const configNames = [
-  "compulsive.config.jsonc",
-  "compulsive.config.json",
-  ".compulsiverc.jsonc",
-  ".compulsiverc.json",
-];
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await access(path, constants.F_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function findConfig(startDirectory: string): Promise<string | undefined> {
-  let directory = resolve(startDirectory);
-  const root = parse(directory).root;
-  for (;;) {
-    for (const name of configNames) {
-      const candidate = join(directory, name);
-      if (await exists(candidate)) return candidate;
-    }
-    if (directory === root) return undefined;
-    directory = dirname(directory);
-  }
-}
+export const defineConfig = createDefineConfig<CompulsiveFileConfig>();
 
 function resolveConfiguredPath(
   value: string,
@@ -122,22 +93,24 @@ export async function loadCompulsiveConfig(
   const explicitPath = options.configPath
     ? resolveConfiguredPath(options.configPath, currentDirectory, homeDirectory)
     : undefined;
-  const path = explicitPath ?? (await findConfig(currentDirectory));
-  if (!path) return { config: {} };
-  if (explicitPath && !(await exists(path))) {
-    throw new CompulsiveError("INVALID_INPUT", `Configuration file does not exist: ${path}`);
-  }
 
   try {
-    const errors: JSONCParseError[] = [];
-    const parsed = parseJSONC<unknown>(await readFile(path, "utf8"), {
-      allowTrailingComma: true,
-      errors,
+    const loaded = await loadConfig<CompulsiveFileConfig>({
+      name: "compulsive",
+      cwd: currentDirectory,
+      ...(explicitPath === undefined ? {} : { configFile: explicitPath }),
+      configFileRequired: explicitPath !== undefined,
+      rcFile: false,
+      globalRc: false,
+      packageJson: false,
+      dotenv: false,
+      envName: false,
+      extend: false,
+      giget: false,
     });
-    if (errors.length > 0) {
-      throw new CompulsiveError("INVALID_INPUT", `Configuration contains invalid JSONC: ${path}`);
-    }
-    const config = validateConfig(parsed, path);
+    if (!loaded._configFile) return { config: {} };
+    const path = loaded._configFile;
+    const config = validateConfig(loaded.config, path);
     const baseDirectory = dirname(path);
     return {
       path,
@@ -157,8 +130,13 @@ export async function loadCompulsiveConfig(
     };
   } catch (error) {
     if (error instanceof CompulsiveError) throw error;
-    throw new CompulsiveError("INVALID_INPUT", `Unable to load configuration: ${path}`, {
-      cause: error,
-    });
+    const source = explicitPath ?? currentDirectory;
+    throw new CompulsiveError(
+      "INVALID_INPUT",
+      explicitPath
+        ? `Configuration file does not exist or cannot be loaded: ${source}`
+        : `Unable to load configuration from: ${source}`,
+      { cause: error },
+    );
   }
 }

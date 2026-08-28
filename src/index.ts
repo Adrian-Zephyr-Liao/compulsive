@@ -1,6 +1,6 @@
 export { CompulsiveError } from "./errors.js";
 export type { CompulsiveErrorCode } from "./errors.js";
-export { loadCompulsiveConfig } from "./file-config.js";
+export { defineConfig, loadCompulsiveConfig } from "./file-config.js";
 export type {
   CompulsiveFileConfig,
   LoadedCompulsiveConfig,
