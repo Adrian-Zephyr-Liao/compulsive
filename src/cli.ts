@@ -17,11 +17,20 @@ import { formatCdCommand } from "./shell.js";
 import {
   confirmAction,
   createTerminalTheme,
+  selectNavigationTarget,
   selectRepository,
+  selectWorkspace,
   withSpinner,
+  type NavigationTarget,
   type TerminalTheme,
 } from "./terminal.js";
-import type { ManagerConfig, OrganizePlan, RepositoryManager, RepositoryRecord } from "./types.js";
+import type {
+  ManagerConfig,
+  OrganizePlan,
+  RepositoryManager,
+  RepositoryRecord,
+  WorkspaceRecord,
+} from "./types.js";
 
 const helpText = `Compulsive — safely organize local Git repositories
 
@@ -33,18 +42,36 @@ Usage:
   cpl add <path>
   cpl scan [paths...] [--register]
   cpl list [query] [--json]
-  cpl search <query> [--json]
+  cpl search <query> [--workspace <workspace-query>] [--json]
   cpl go <query> [--json]
   cpl organize <query> [--dry-run | --yes] [--json]
   cpl organize --all [--dry-run | --yes] [--json]
   cpl forget <query> [--yes]
-  cpl config [show | file | set-root <path> | add-scan-root <path> | remove-scan-root <path>]
+  cpl workspace|ws create <name> [--path <path>] [--json]
+  cpl workspace|ws list [query] [--json]
+  cpl workspace|ws show|go <workspace-query> [--json]
+  cpl workspace|ws add <workspace-query> <repository-query> [--alias <name>] [--json]
+  cpl workspace|ws add <workspace-query> <repository-query> --worktree --branch <branch> [--create-branch] [--alias <name>] [--json]
+  cpl workspace|ws remove <workspace-query> <repository-query> [--yes] [--json]
+  cpl workspace|ws sync [workspace-query] [--json]
+  cpl workspace|ws delete <workspace-query> [--yes] [--json]
+  cpl config [show | file | set-root <path> | set-workspace-root <path> | add-scan-root <path> | remove-scan-root <path>]
   cpl doctor [--json]
 
 Compulsive never deletes repository files.`;
 
-const booleanFlags = ["json", "register", "dry-run", "yes", "help", "color", "all"];
-const valueFlags = ["root", "depth", "config"];
+const booleanFlags = [
+  "json",
+  "register",
+  "dry-run",
+  "yes",
+  "help",
+  "color",
+  "all",
+  "worktree",
+  "create-branch",
+];
+const valueFlags = ["root", "depth", "config", "path", "alias", "branch", "workspace"];
 
 interface ParsedArguments {
   command: string;
@@ -52,6 +79,8 @@ interface ParsedArguments {
   flags: Set<string>;
   values: Map<string, string>;
 }
+
+class CliCancelled extends Error {}
 
 export interface CliContext {
   manager: RepositoryManager;
@@ -66,6 +95,14 @@ export interface CliContext {
     message: string,
     repositories: RepositoryRecord[],
   ): Promise<RepositoryRecord | undefined>;
+  chooseWorkspace(
+    message: string,
+    workspaces: WorkspaceRecord[],
+  ): Promise<WorkspaceRecord | undefined>;
+  chooseDestination(
+    message: string,
+    targets: NavigationTarget[],
+  ): Promise<NavigationTarget | undefined>;
   confirm(message: string): Promise<boolean | undefined>;
   runTask<T>(message: string, task: () => Promise<T>): Promise<T>;
 }
@@ -88,6 +125,8 @@ function createDefaultContext(loaded: LoadedCompulsiveConfig = { config: {} }): 
       isTTY,
     }),
     chooseRepository: selectRepository,
+    chooseWorkspace: selectWorkspace,
+    chooseDestination: selectNavigationTarget,
     confirm: confirmAction,
     runTask: withSpinner,
   };
@@ -154,6 +193,10 @@ function describeRecord(record: RepositoryRecord, context: CliContext): string {
   return context.theme.repository(record.classificationPath, record.absolutePath);
 }
 
+function describeWorkspace(workspace: WorkspaceRecord, context: CliContext): string {
+  return context.theme.workspace(workspace.name, workspace.absolutePath, workspace.members.length);
+}
+
 async function selectOne(
   manager: RepositoryManager,
   query: string,
@@ -172,7 +215,76 @@ async function selectOne(
     );
   }
   const selected = await context.chooseRepository("Choose a repository", matches);
-  if (!selected) throw new CompulsiveError("INVALID_INPUT", "Repository selection cancelled.");
+  if (!selected) throw new CliCancelled();
+  return selected;
+}
+
+async function selectOneWorkspace(
+  manager: RepositoryManager,
+  query: string,
+  context: CliContext,
+  allowPrompt: boolean,
+): Promise<WorkspaceRecord> {
+  const matches = await manager.searchWorkspaces({ query });
+  if (matches.length === 0) {
+    throw new CompulsiveError("NOT_FOUND", `No workspace matches: ${query}`);
+  }
+  if (matches.length === 1) return matches[0]!;
+  if (!allowPrompt) {
+    throw new CompulsiveError(
+      "AMBIGUOUS_MATCH",
+      `Multiple workspaces match "${query}": ${matches.map((item) => item.name).join(", ")}`,
+    );
+  }
+  const selected = await context.chooseWorkspace("Choose a workspace", matches);
+  if (!selected) throw new CliCancelled();
+  return selected;
+}
+
+async function repositoriesInWorkspace(
+  manager: RepositoryManager,
+  workspace: WorkspaceRecord,
+  query = "",
+): Promise<RepositoryRecord[]> {
+  const records = await manager.search();
+  const normalizedQuery = query.trim().toLowerCase();
+  const memberByRepository = new Map(
+    workspace.members.map((member) => [member.repositoryId, member] as const),
+  );
+  return records.filter((record) => {
+    const member = memberByRepository.get(record.id);
+    if (!member) return false;
+    if (!normalizedQuery) return true;
+    return [
+      member.alias,
+      record.id,
+      record.name,
+      record.classificationPath,
+      record.absolutePath,
+    ].some((value) => value.toLowerCase().includes(normalizedQuery));
+  });
+}
+
+async function selectWorkspaceRepository(
+  manager: RepositoryManager,
+  workspace: WorkspaceRecord,
+  query: string,
+  context: CliContext,
+  allowPrompt: boolean,
+): Promise<RepositoryRecord> {
+  const matches = await repositoriesInWorkspace(manager, workspace, query);
+  if (matches.length === 0) {
+    throw new CompulsiveError("NOT_FOUND", `No workspace repository matches: ${query}`);
+  }
+  if (matches.length === 1) return matches[0]!;
+  if (!allowPrompt) {
+    throw new CompulsiveError(
+      "AMBIGUOUS_MATCH",
+      `Multiple workspace repositories match "${query}": ${matches.map((item) => item.name).join(", ")}`,
+    );
+  }
+  const selected = await context.chooseRepository("Choose a workspace repository", matches);
+  if (!selected) throw new CliCancelled();
   return selected;
 }
 
@@ -228,6 +340,23 @@ async function outputCd(
   else context.stdout(command);
 }
 
+async function outputWorkspaceCd(
+  workspace: WorkspaceRecord,
+  context: CliContext,
+  json: boolean,
+): Promise<void> {
+  const command = formatCdCommand(workspace.absolutePath);
+  let copied = true;
+  try {
+    await context.copyText(command);
+  } catch {
+    copied = false;
+    context.stderr(context.theme.warning("Unable to copy the cd command; it is printed below."));
+  }
+  if (json) printValue(context, { workspace, cdCommand: command, copied }, true);
+  else context.stdout(command);
+}
+
 async function openRepositoryPicker(context: CliContext): Promise<void> {
   const records = await context.manager.search();
   if (records.length === 0) {
@@ -236,6 +365,35 @@ async function openRepositoryPicker(context: CliContext): Promise<void> {
   }
   const selected = await context.chooseRepository("Search repositories", records);
   if (selected) await outputCd(selected, context, false);
+}
+
+async function openWorkspacePicker(context: CliContext): Promise<void> {
+  const workspaces = await context.manager.searchWorkspaces();
+  if (workspaces.length === 0) {
+    context.stdout("No workspaces are registered.");
+    return;
+  }
+  const selected = await context.chooseWorkspace("Search workspaces", workspaces);
+  if (selected) await outputWorkspaceCd(selected, context, false);
+}
+
+async function openDestinationPicker(context: CliContext): Promise<void> {
+  const [repositories, workspaces] = await Promise.all([
+    context.manager.search(),
+    context.manager.searchWorkspaces(),
+  ]);
+  const targets: NavigationTarget[] = [
+    ...workspaces.map((workspace) => ({ kind: "workspace" as const, workspace })),
+    ...repositories.map((repository) => ({ kind: "repository" as const, repository })),
+  ];
+  if (targets.length === 0) {
+    context.stdout("No repositories or workspaces are registered.");
+    return;
+  }
+  const selected = await context.chooseDestination("Search repositories and workspaces", targets);
+  if (!selected) return;
+  if (selected.kind === "repository") await outputCd(selected.repository, context, false);
+  else await outputWorkspaceCd(selected.workspace, context, false);
 }
 
 async function handleConfig(
@@ -258,6 +416,10 @@ async function handleConfig(
     config = await context.manager.getConfig();
   } else if (action === "set-root") {
     config = await context.manager.updateConfig({ rootDir: requireValue(value, "Root path") });
+  } else if (action === "set-workspace-root") {
+    config = await context.manager.updateConfig({
+      workspaceRoot: requireValue(value, "Workspace root path"),
+    });
   } else if (action === "add-scan-root" || action === "remove-scan-root") {
     const scanRoot = requireValue(value, "Scan root");
     const normalizedScanRoot = resolve(scanRoot);
@@ -306,12 +468,168 @@ async function handleDoctor(context: CliContext, json: boolean): Promise<void> {
   }
 }
 
+async function handleWorkspace(
+  parsed: ParsedArguments,
+  context: CliContext,
+  json: boolean,
+  allowPrompt: boolean,
+): Promise<void> {
+  const [action, ...arguments_] = parsed.positionals;
+  if (!action) {
+    if (allowPrompt) {
+      await openWorkspacePicker(context);
+      return;
+    }
+    throw new CompulsiveError("INVALID_INPUT", "Workspace action is required.");
+  }
+
+  if (action === "create") {
+    const workspace = await context.manager.createWorkspace({
+      name: requireValue(arguments_[0], "Workspace name"),
+      ...(parsed.values.has("path") ? { path: parsed.values.get("path")! } : {}),
+    });
+    printValue(context, json ? workspace : describeWorkspace(workspace, context), json);
+    return;
+  }
+
+  if (action === "list") {
+    const workspaces = await context.manager.searchWorkspaces({ query: arguments_.join(" ") });
+    if (json) printValue(context, workspaces, true);
+    else workspaces.forEach((workspace) => context.stdout(describeWorkspace(workspace, context)));
+    return;
+  }
+
+  if (action === "show" || action === "go") {
+    const query = requireValue(arguments_.join(" "), "Workspace query");
+    const workspace = await selectOneWorkspace(context.manager, query, context, allowPrompt);
+    if (action === "go") await outputWorkspaceCd(workspace, context, json);
+    else printValue(context, json ? workspace : describeWorkspace(workspace, context), json);
+    return;
+  }
+
+  if (action === "add") {
+    const workspaceQuery = requireValue(arguments_[0], "Workspace query");
+    const repositoryQuery = requireValue(arguments_[1], "Repository query");
+    if (parsed.flags.has("create-branch") && !parsed.flags.has("worktree")) {
+      throw new CompulsiveError("INVALID_INPUT", "--create-branch requires --worktree.");
+    }
+    const workspace = await selectOneWorkspace(
+      context.manager,
+      workspaceQuery,
+      context,
+      allowPrompt,
+    );
+    const repository = await selectOne(context.manager, repositoryQuery, context, allowPrompt);
+    const alias = parsed.values.get("alias");
+    const updated = parsed.flags.has("worktree")
+      ? await context.manager.addWorkspaceMember({
+          workspaceId: workspace.id,
+          repositoryId: repository.id,
+          mode: "worktree",
+          branch: requireValue(parsed.values.get("branch"), "Worktree branch"),
+          createBranch: parsed.flags.has("create-branch"),
+          ...(alias === undefined ? {} : { alias }),
+        })
+      : await context.manager.addWorkspaceMember({
+          workspaceId: workspace.id,
+          repositoryId: repository.id,
+          ...(alias === undefined ? {} : { alias }),
+        });
+    printValue(context, json ? updated : describeWorkspace(updated, context), json);
+    return;
+  }
+
+  if (action === "remove") {
+    const workspace = await selectOneWorkspace(
+      context.manager,
+      requireValue(arguments_[0], "Workspace query"),
+      context,
+      allowPrompt,
+    );
+    const repository = await selectWorkspaceRepository(
+      context.manager,
+      workspace,
+      requireValue(arguments_[1], "Repository query"),
+      context,
+      allowPrompt,
+    );
+    if (!parsed.flags.has("yes")) {
+      if (!allowPrompt) {
+        throw new CompulsiveError(
+          "INVALID_INPUT",
+          "Use --yes to remove a workspace member non-interactively.",
+        );
+      }
+      const confirmed = await context.confirm(
+        `Remove ${repository.name} from workspace ${workspace.name}?`,
+      );
+      if (!confirmed) throw new CliCancelled();
+    }
+    const updated = await context.manager.removeWorkspaceMember({
+      workspaceId: workspace.id,
+      repositoryId: repository.id,
+    });
+    printValue(context, json ? updated : describeWorkspace(updated, context), json);
+    return;
+  }
+
+  if (action === "sync") {
+    const query = arguments_.join(" ").trim();
+    const workspaces = query
+      ? [await selectOneWorkspace(context.manager, query, context, allowPrompt)]
+      : await context.manager.searchWorkspaces();
+    const results = [];
+    for (const workspace of workspaces) {
+      results.push(await context.manager.syncWorkspace(workspace.id));
+    }
+    if (json) printValue(context, query ? results[0] : results, true);
+    else {
+      for (const result of results) {
+        context.stdout(describeWorkspace(result.workspace, context));
+        for (const issue of result.issues) context.stderr(context.theme.warning(issue.message));
+      }
+    }
+    if (results.some((result) => result.issues.length > 0)) {
+      throw new CompulsiveError("CONFLICT", "One or more workspace members could not be synced.");
+    }
+    return;
+  }
+
+  if (action === "delete") {
+    const workspace = await selectOneWorkspace(
+      context.manager,
+      requireValue(arguments_.join(" "), "Workspace query"),
+      context,
+      allowPrompt,
+    );
+    if (!parsed.flags.has("yes")) {
+      if (!allowPrompt) {
+        throw new CompulsiveError(
+          "INVALID_INPUT",
+          "Use --yes to delete a workspace non-interactively.",
+        );
+      }
+      const confirmed = await context.confirm(`Delete workspace ${workspace.name}?`);
+      if (!confirmed) throw new CliCancelled();
+    }
+    await context.manager.deleteWorkspace(workspace.id);
+    printValue(
+      context,
+      json ? { deleted: workspace.id } : context.theme.success(`Deleted ${workspace.name}`),
+      json,
+    );
+    return;
+  }
+
+  throw new CompulsiveError("INVALID_INPUT", `Unknown workspace action: ${action}`);
+}
+
 async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<void> {
   const json = parsed.flags.has("json");
   const allowPrompt = context.isTTY && !json;
   switch (parsed.command) {
     case "": {
-      if (allowPrompt) await openRepositoryPicker(context);
+      if (allowPrompt) await openDestinationPicker(context);
       else context.stdout(helpText);
       return;
     }
@@ -323,9 +641,11 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
     }
     case "init": {
       const rootDir = parsed.values.get("root") ?? context.fileConfig.rootDir;
+      const workspaceRoot = context.fileConfig.workspaceRoot;
       const scanRoots = context.fileConfig.scanRoots;
       const config = await context.manager.initialize({
         ...(rootDir === undefined ? {} : { rootDir }),
+        ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
         ...(scanRoots === undefined ? {} : { scanRoots }),
       });
       printValue(
@@ -395,7 +715,14 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
         return;
       }
       requireValue(query, "Repository query");
-      const records = await context.manager.search({ query });
+      const workspaceQuery = parsed.values.get("workspace");
+      const records = workspaceQuery
+        ? await repositoriesInWorkspace(
+            context.manager,
+            await selectOneWorkspace(context.manager, workspaceQuery, context, allowPrompt),
+            query,
+          )
+        : await context.manager.search({ query });
       if (json) printValue(context, records, true);
       else if (records.length === 0) context.stdout(`No repositories match: ${query}`);
       else records.forEach((record) => context.stdout(describeRecord(record, context)));
@@ -514,6 +841,11 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
       );
       return;
     }
+    case "workspace":
+    case "ws": {
+      await handleWorkspace(parsed, context, json, allowPrompt);
+      return;
+    }
     case "config": {
       await handleConfig(parsed, context, json);
       return;
@@ -549,6 +881,7 @@ export async function runCli(argv: string[], overrides: Partial<CliContext> = {}
     await dispatch(parsed, context);
     return 0;
   } catch (error) {
+    if (error instanceof CliCancelled) return 0;
     const failure =
       error instanceof CompulsiveError
         ? error

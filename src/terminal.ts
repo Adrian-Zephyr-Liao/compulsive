@@ -2,7 +2,11 @@ import { autocomplete, confirm, isCancel, spinner, type SpinnerOptions } from "@
 import pc from "picocolors";
 
 import type { TerminalColorMode } from "./file-config.js";
-import type { RepositoryRecord } from "./types.js";
+import type { RepositoryRecord, WorkspaceRecord } from "./types.js";
+
+export type NavigationTarget =
+  | { kind: "repository"; repository: RepositoryRecord }
+  | { kind: "workspace"; workspace: WorkspaceRecord };
 
 export interface TerminalThemeOptions {
   color: TerminalColorMode;
@@ -15,6 +19,7 @@ export interface TerminalTheme {
   warning(message: string): string;
   error(code: string, message: string): string;
   repository(classification: string, path: string): string;
+  workspace(name: string, path: string, memberCount: number): string;
   check(ok: boolean, name: string, detail: string): string;
   transition(source: string, target: string): string;
 }
@@ -42,6 +47,9 @@ export function createTerminalTheme(options: TerminalThemeOptions): TerminalThem
     repository(classification, path) {
       return `${colors.cyan(icons.item)} ${colors.bold(classification)}\n  ${colors.dim(path)}`;
     },
+    workspace(name, path, memberCount) {
+      return `${colors.magenta(icons.item)} ${colors.bold(name)} ${colors.dim(`(${String(memberCount)} members)`)}\n  ${colors.dim(path)}`;
+    },
     check(ok, name, detail) {
       const icon = ok ? colors.green(icons.pass) : colors.red(icons.fail);
       return `${icon} ${colors.bold(name)}\n  ${colors.dim(detail)}`;
@@ -57,7 +65,7 @@ export async function selectRepository(
   message: string,
   repositories: RepositoryRecord[],
 ): Promise<RepositoryRecord | undefined> {
-  const result = await autocomplete({
+  const result = await autocomplete<RepositoryRecord>({
     message,
     placeholder: "Type to filter repositories...",
     maxItems: 10,
@@ -66,6 +74,50 @@ export async function selectRepository(
       label: repository.classificationPath,
       hint: repository.absolutePath,
     })),
+    output: process.stderr,
+  });
+  return isCancel(result) ? undefined : result;
+}
+
+export async function selectWorkspace(
+  message: string,
+  workspaces: WorkspaceRecord[],
+): Promise<WorkspaceRecord | undefined> {
+  const result = await autocomplete({
+    message,
+    placeholder: "Type to filter workspaces...",
+    maxItems: 10,
+    options: workspaces.map((workspace) => ({
+      value: workspace,
+      label: workspace.name,
+      hint: `${workspace.absolutePath} · ${String(workspace.members.length)} members`,
+    })),
+    output: process.stderr,
+  });
+  return isCancel(result) ? undefined : result;
+}
+
+export async function selectNavigationTarget(
+  message: string,
+  targets: NavigationTarget[],
+): Promise<NavigationTarget | undefined> {
+  const result = await autocomplete<NavigationTarget>({
+    message,
+    placeholder: "Type to filter repositories and workspaces...",
+    maxItems: 12,
+    options: targets.map((target) =>
+      target.kind === "repository"
+        ? {
+            value: target,
+            label: target.repository.classificationPath,
+            hint: `repository · ${target.repository.absolutePath}`,
+          }
+        : {
+            value: target,
+            label: target.workspace.name,
+            hint: `workspace · ${target.workspace.absolutePath}`,
+          },
+    ),
     output: process.stderr,
   });
   return isCancel(result) ? undefined : result;

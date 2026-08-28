@@ -64,7 +64,9 @@ describe("cpl search", () => {
 
     output.length = 0;
     expect(await runCli(["help"], context)).toBe(0);
-    expect(output.join("\n")).toContain("cpl search <query> [--json]");
+    expect(output.join("\n")).toContain(
+      "cpl search <query> [--workspace <workspace-query>] [--json]",
+    );
   });
 
   it("opens a searchable repository picker in interactive terminals", async () => {
@@ -76,6 +78,7 @@ describe("cpl search", () => {
     const output: string[] = [];
     const copied: string[] = [];
     const pickerMessages: string[] = [];
+    const destinationMessages: string[] = [];
     const context = {
       manager,
       stdout: (value: string) => output.push(value),
@@ -87,13 +90,18 @@ describe("cpl search", () => {
         pickerMessages.push(message);
         return record;
       },
+      chooseDestination: async (message: string) => {
+        destinationMessages.push(message);
+        return { kind: "repository" as const, repository: record };
+      },
       isTTY: true,
     };
 
     expect(await runCli(["search"], context)).toBe(0);
     expect(await runCli([], context)).toBe(0);
 
-    expect(pickerMessages).toEqual(["Search repositories", "Search repositories"]);
+    expect(pickerMessages).toEqual(["Search repositories"]);
+    expect(destinationMessages).toEqual(["Search repositories and workspaces"]);
     expect(copied).toEqual([
       `cd -- '${await realpath(repositoryPath)}'`,
       `cd -- '${await realpath(repositoryPath)}'`,
