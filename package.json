@@ -40,6 +40,12 @@
     "check": "vp check",
     "prepublishOnly": "vp check && vp test --run && vp pack --publint --attw"
   },
+  "dependencies": {
+    "@clack/prompts": "^1.7.0",
+    "confbox": "^0.2.4",
+    "mri": "^1.2.0",
+    "picocolors": "^1.1.1"
+  },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",
     "@types/node": "^24.3.0",
