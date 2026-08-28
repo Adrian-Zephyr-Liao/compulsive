@@ -12,6 +12,7 @@ export { createRepositoryManager } from "./manager.js";
 export { formatCdCommand, quoteZsh } from "./shell.js";
 export type {
   CloneRepositoryInput,
+  CreateWorkspaceInput,
   DiscoveredRepository,
   DiscoverRepositoriesInput,
   DiscoveryResult,
@@ -26,6 +27,7 @@ export type {
   RepositoryManagerOptions,
   RepositoryRecord,
   SearchRepositoriesInput,
+  SearchWorkspacesInput,
   UpdateConfigInput,
   WorkspaceId,
   WorkspaceMember,

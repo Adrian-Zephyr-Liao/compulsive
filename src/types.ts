@@ -117,6 +117,15 @@ export interface SearchRepositoriesInput {
   query?: string;
 }
 
+export interface CreateWorkspaceInput {
+  name: string;
+  path?: string;
+}
+
+export interface SearchWorkspacesInput {
+  query?: string;
+}
+
 export interface RepositoryManagerOptions {
   dataDir?: string;
   defaultRootDir?: string;
@@ -133,4 +142,6 @@ export interface RepositoryManager {
   planOrganize(id: RepositoryId): Promise<OrganizePlan>;
   organize(plan: OrganizePlan): Promise<RepositoryRecord>;
   forget(id: RepositoryId): Promise<void>;
+  createWorkspace(input: CreateWorkspaceInput): Promise<WorkspaceRecord>;
+  searchWorkspaces(input?: SearchWorkspacesInput): Promise<WorkspaceRecord[]>;
 }

@@ -15,6 +15,7 @@ import {
   writeJsonAtomic,
 } from "./storage.js";
 import type {
+  CreateWorkspaceInput,
   ManagerConfig,
   DiscoveryResult,
   OrganizePlan,
@@ -22,7 +23,9 @@ import type {
   RepositoryManagerOptions,
   RepositoryRecord,
   RepositoryRegistry,
+  SearchWorkspacesInput,
 } from "./types.js";
+import { createWorkspace, searchWorkspaces } from "./workspaces.js";
 
 function defaultDataDir(): string {
   return process.env.CPL_HOME ?? join(homedir(), "Library", "Application Support", "compulsive");
@@ -469,5 +472,7 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
     planOrganize,
     organize,
     forget,
+    createWorkspace: (input: CreateWorkspaceInput) => createWorkspace(paths, input),
+    searchWorkspaces: (input?: SearchWorkspacesInput) => searchWorkspaces(paths, input),
   };
 }
