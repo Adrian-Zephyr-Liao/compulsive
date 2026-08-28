@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
-import { findRepositoryRoot, readOrigin } from "./git.js";
+import { CompulsiveError } from "./errors.js";
+import { findRepositoryRoot, readOrigin, runGit } from "./git.js";
 import { parseGitRemote } from "./git-url.js";
 import {
   createStoragePaths,
@@ -67,6 +68,7 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
     const config = await readConfig(paths.config);
     const registry = await readRegistry(paths.registry);
     const repositoryRoot = await realpath(await findRepositoryRoot(resolve(input.path)));
+    const canonicalManagedRoot = await realpath(config.rootDir);
     const existingByPath = registry.repositories.find(
       (record) => record.absolutePath === repositoryRoot,
     );
@@ -85,7 +87,7 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
     const common = {
       id: `${classification ? "remote" : "local"}:${randomUUID()}` as RepositoryRecord["id"],
       absolutePath: repositoryRoot,
-      isManaged: pathIsInside(config.rootDir, repositoryRoot),
+      isManaged: pathIsInside(canonicalManagedRoot, repositoryRoot),
       registeredAt: now,
       lastSeenAt: now,
     };
@@ -97,7 +99,7 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
             name: classification.name,
             classificationPath: classification.relativePath,
             canonicalRemote: classification.canonicalRemote,
-            remoteUrl,
+            remoteUrl: classification.canonicalRemote,
             host: classification.host,
             ownerPath: classification.ownerPath,
           }
@@ -127,5 +129,34 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
       .sort((left, right) => matchRank(left, query) - matchRank(right, query));
   }
 
-  return { initialize, register, search };
+  async function clone(input: { remote: string; depth?: number }): Promise<RepositoryRecord> {
+    const config = await readConfig(paths.config);
+    const registry = await readRegistry(paths.registry);
+    const classification = parseGitRemote(input.remote);
+    const existing = registry.repositories.find(
+      (record) => record.canonicalRemote === classification.canonicalRemote,
+    );
+    if (existing) return existing;
+
+    if (input.depth !== undefined && (!Number.isInteger(input.depth) || input.depth < 1)) {
+      throw new CompulsiveError("INVALID_INPUT", "Clone depth must be a positive integer.");
+    }
+
+    const target = join(config.rootDir, ...classification.relativePath.split("/"));
+    if (!pathIsInside(config.rootDir, target)) {
+      throw new CompulsiveError("INVALID_REMOTE", "Classified target escapes the managed root.");
+    }
+    if (await fileExists(target)) {
+      throw new CompulsiveError("CONFLICT", `Clone target already exists: ${target}`);
+    }
+
+    await mkdir(dirname(target), { recursive: true });
+    const arguments_ = ["clone"];
+    if (input.depth !== undefined) arguments_.push("--depth", String(input.depth));
+    arguments_.push("--", input.remote, target);
+    await runGit(arguments_);
+    return register({ path: target });
+  }
+
+  return { initialize, clone, register, search };
 }

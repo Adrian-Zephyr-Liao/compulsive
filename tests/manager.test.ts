@@ -2,11 +2,13 @@ import { execFile } from "node:child_process";
 import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createRepositoryManager } from "../src/manager.js";
+import { parseGitRemote } from "../src/git-url.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -98,5 +100,57 @@ describe("RepositoryManager state", () => {
     const results = await manager.search({ query: "core" });
 
     expect(results.map((record) => record.name)).toEqual(["core", "core-utils"]);
+  });
+
+  it("clones into the classified root and returns the existing record on retry", async () => {
+    const bareRemote = join(sandbox, "remotes", "acme", "project.git");
+    await execFileAsync("git", ["init", "--bare", "-q", bareRemote]);
+    const remote = pathToFileURL(bareRemote).toString();
+    const classification = parseGitRemote(remote);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+
+    const first = await manager.clone({ remote, depth: 1 });
+    const second = await manager.clone({ remote });
+
+    expect(first.absolutePath).toBe(
+      await realpath(join(rootDir, ...classification.relativePath.split("/"))),
+    );
+    expect(first.isManaged).toBe(true);
+    expect(second).toEqual(first);
+  });
+
+  it("refuses to clone into an occupied classification path", async () => {
+    const bareRemote = join(sandbox, "remotes", "acme", "occupied.git");
+    await execFileAsync("git", ["init", "--bare", "-q", bareRemote]);
+    const remote = pathToFileURL(bareRemote).toString();
+    const classification = parseGitRemote(remote);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    await execFileAsync("mkdir", ["-p", join(rootDir, ...classification.relativePath.split("/"))]);
+
+    await expect(manager.clone({ remote })).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("never persists credentials from an origin URL", async () => {
+    const repositoryPath = join(sandbox, "credential-test");
+    await execFileAsync("git", ["init", "-q", repositoryPath]);
+    await execFileAsync("git", [
+      "-C",
+      repositoryPath,
+      "remote",
+      "add",
+      "origin",
+      "https://secret-user:secret-token@github.com/acme/private.git",
+    ]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+
+    const record = await manager.register({ path: repositoryPath });
+    const persisted = await readFile(join(dataDir, "repositories.json"), "utf8");
+
+    expect(record.remoteUrl).toBe("github.com/acme/private");
+    expect(persisted).not.toContain("secret-user");
+    expect(persisted).not.toContain("secret-token");
   });
 });

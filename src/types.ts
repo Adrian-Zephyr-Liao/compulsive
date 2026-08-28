@@ -45,6 +45,11 @@ export interface RegisterRepositoryInput {
   path: string;
 }
 
+export interface CloneRepositoryInput {
+  remote: string;
+  depth?: number;
+}
+
 export interface SearchRepositoriesInput {
   query?: string;
 }
@@ -56,6 +61,7 @@ export interface RepositoryManagerOptions {
 
 export interface RepositoryManager {
   initialize(input?: InitializeInput): Promise<ManagerConfig>;
+  clone(input: CloneRepositoryInput): Promise<RepositoryRecord>;
   register(input: RegisterRepositoryInput): Promise<RepositoryRecord>;
   search(input?: SearchRepositoriesInput): Promise<RepositoryRecord[]>;
 }
