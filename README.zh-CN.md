@@ -2,10 +2,25 @@
 
 [English](./README.md) · 简体中文
 
-Compulsive 是一个面向 macOS 的本地 Git 项目管理工具。它提供 `cpl` 命令和可复用的
-TypeScript API，用于按规则克隆项目、登记已有仓库、快速查找仓库，以及安全整理目录。
-同一个仓库还可以加入多个 Workspace，并按需选择共享 checkout 的链接模式或隔离分支的
-Git worktree 模式。
+**AI 时代的仓库管家。**
+
+AI 已经改变了软件开发。一个开发者现在可以同时探索更多框架、运行更多实验，并维护大量
+由 Agent 协助生成的项目。瓶颈不再是创建仓库，而是记住每个仓库放在哪里、需要时快速找到
+它，以及在不重复 clone、不丢失工作的前提下组织相关项目。
+
+Compulsive 是一个面向 macOS 的本地 Git 仓库管理工具。它通过 `cpl` 命令为每个仓库提供
+可预测的 canonical 位置，让所有仓库都可搜索，并允许多个 Workspace 通过链接或隔离的
+Git worktree 复用同一个仓库。
+
+## 核心能力
+
+- 按 `<host>/<owner...>/<repo>` 自动分类远程仓库。
+- 将无 remote 仓库统一归入 `local/<repo>`。
+- 发现和登记已有仓库，不擅自移动文件。
+- 移动前预演，并保护脏仓库、嵌套仓库和已占用目标。
+- 在脚本或交互终端中搜索仓库与 Workspace。
+- 让多个 Workspace 复用同一个 canonical 仓库，避免重复 clone。
+- clone、跳转或整理后复制安全的 `cd -- 'path'` 命令。
 
 ## 安装
 
