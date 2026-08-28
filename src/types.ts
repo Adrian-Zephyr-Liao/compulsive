@@ -41,6 +41,11 @@ export interface InitializeInput {
   scanRoots?: string[];
 }
 
+export interface UpdateConfigInput {
+  rootDir?: string;
+  scanRoots?: string[];
+}
+
 export interface RegisterRepositoryInput {
   path: string;
 }
@@ -86,6 +91,8 @@ export interface RepositoryManagerOptions {
 
 export interface RepositoryManager {
   initialize(input?: InitializeInput): Promise<ManagerConfig>;
+  getConfig(): Promise<ManagerConfig>;
+  updateConfig(input: UpdateConfigInput): Promise<ManagerConfig>;
   clone(input: CloneRepositoryInput): Promise<RepositoryRecord>;
   discover(input?: DiscoverRepositoriesInput): Promise<DiscoveryResult>;
   register(input: RegisterRepositoryInput): Promise<RepositoryRecord>;

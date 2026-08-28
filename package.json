@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "A safe local Git repository organizer and CLI.",
   "license": "MIT",
+  "author": "Adrian Zephyr",
   "bin": {
     "cpl": "./dist/cli.mjs"
   },
@@ -12,10 +13,20 @@
     "LICENSE"
   ],
   "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.cts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs"
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./package.json": "./package.json"
   },
@@ -30,7 +41,9 @@
     "prepublishOnly": "vp run build"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "0.18.5",
     "@types/node": "^24.3.0",
+    "publint": "0.3.24",
     "typescript": "^7.0.0",
     "vite": "npm:@voidzero-dev/vite-plus-core@^0.2.8",
     "vite-plus": "^0.2.8",

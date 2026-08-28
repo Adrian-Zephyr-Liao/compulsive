@@ -34,7 +34,7 @@ function pathIsInside(parent: string, child: string): boolean {
 }
 
 function matchRank(record: RepositoryRecord, query: string): number {
-  const values = [record.name, record.classificationPath, record.absolutePath];
+  const values = [record.id, record.name, record.classificationPath, record.absolutePath];
   if (values.some((value) => value.toLowerCase() === query)) return 0;
   if (values.some((value) => value.toLowerCase().startsWith(query))) return 1;
   return 2;
@@ -118,6 +118,28 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
     return record;
   }
 
+  async function getConfig(): Promise<ManagerConfig> {
+    return readConfig(paths.config);
+  }
+
+  async function updateConfig(input: {
+    rootDir?: string;
+    scanRoots?: string[];
+  }): Promise<ManagerConfig> {
+    const current = await readConfig(paths.config);
+    const updated: ManagerConfig = {
+      ...current,
+      rootDir: input.rootDir === undefined ? current.rootDir : resolve(input.rootDir),
+      scanRoots:
+        input.scanRoots === undefined
+          ? current.scanRoots
+          : input.scanRoots.map((path) => resolve(path)),
+    };
+    await mkdir(updated.rootDir, { recursive: true });
+    await writeJsonAtomic(paths.config, updated);
+    return updated;
+  }
+
   async function search(input: { query?: string } = {}): Promise<RepositoryRecord[]> {
     await readConfig(paths.config);
     const registry = await readRegistry(paths.registry);
@@ -125,7 +147,7 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
     if (!query) return [...registry.repositories];
     return registry.repositories
       .filter((record) =>
-        [record.name, record.classificationPath, record.absolutePath].some((value) =>
+        [record.id, record.name, record.classificationPath, record.absolutePath].some((value) =>
           value.toLowerCase().includes(query),
         ),
       )
@@ -314,6 +336,8 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
 
   return {
     initialize,
+    getConfig,
+    updateConfig,
     clone,
     discover,
     register,
