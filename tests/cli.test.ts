@@ -212,7 +212,7 @@ describe("cpl CLI", () => {
     ).resolves.toBe(2);
   });
 
-  it("maps ambiguous non-interactive selection to exit code 4", async () => {
+  it("prefers an exact repository name and maps true ambiguity to exit code 4", async () => {
     const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
     await manager.initialize();
     for (const name of ["tool", "tool-extra"]) {
@@ -222,7 +222,17 @@ describe("cpl CLI", () => {
     }
     const errors: string[] = [];
 
-    const exitCode = await runCli(["go", "tool"], {
+    expect(
+      await runCli(["go", "tool"], {
+        manager,
+        stdout: () => undefined,
+        stderr: (value) => errors.push(value),
+        copyText: async () => undefined,
+        isTTY: false,
+      }),
+    ).toBe(0);
+
+    const exitCode = await runCli(["go", "too"], {
       manager,
       stdout: () => undefined,
       stderr: (value) => errors.push(value),

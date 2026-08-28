@@ -5,7 +5,7 @@ import type { TerminalColorMode } from "./file-config.js";
 import type { RepositoryRecord, WorkspaceRecord } from "./types.js";
 
 export type NavigationTarget =
-  | { kind: "repository"; repository: RepositoryRecord }
+  | { kind: "repository"; repository: RepositoryRecord; aliases?: string[] }
   | { kind: "workspace"; workspace: WorkspaceRecord };
 
 export interface TerminalThemeOptions {
@@ -109,7 +109,7 @@ export async function selectNavigationTarget(
       target.kind === "repository"
         ? {
             value: target,
-            label: target.repository.classificationPath,
+            label: [target.repository.classificationPath, ...(target.aliases ?? [])].join(" · "),
             hint: `repository · ${target.repository.absolutePath}`,
           }
         : {

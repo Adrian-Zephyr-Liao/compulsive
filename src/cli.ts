@@ -207,6 +207,13 @@ async function selectOne(
   if (matches.length === 0) {
     throw new CompulsiveError("NOT_FOUND", `No repository matches: ${query}`);
   }
+  const normalizedQuery = query.trim().toLowerCase();
+  const exact = matches.find((record) =>
+    [record.id, record.name, record.classificationPath, record.absolutePath].some(
+      (value) => value.toLowerCase() === normalizedQuery,
+    ),
+  );
+  if (exact) return exact;
   if (matches.length === 1) return matches[0]!;
   if (!allowPrompt) {
     throw new CompulsiveError(
@@ -229,6 +236,13 @@ async function selectOneWorkspace(
   if (matches.length === 0) {
     throw new CompulsiveError("NOT_FOUND", `No workspace matches: ${query}`);
   }
+  const normalizedQuery = query.trim().toLowerCase();
+  const exact = matches.find((workspace) =>
+    [workspace.id, workspace.name, workspace.absolutePath].some(
+      (value) => value.toLowerCase() === normalizedQuery,
+    ),
+  );
+  if (exact) return exact;
   if (matches.length === 1) return matches[0]!;
   if (!allowPrompt) {
     throw new CompulsiveError(
@@ -276,6 +290,18 @@ async function selectWorkspaceRepository(
   if (matches.length === 0) {
     throw new CompulsiveError("NOT_FOUND", `No workspace repository matches: ${query}`);
   }
+  const normalizedQuery = query.trim().toLowerCase();
+  const exact = matches.find((record) => {
+    const member = workspace.members.find((item) => item.repositoryId === record.id);
+    return [
+      member?.alias,
+      record.id,
+      record.name,
+      record.classificationPath,
+      record.absolutePath,
+    ].some((value) => value?.toLowerCase() === normalizedQuery);
+  });
+  if (exact) return exact;
   if (matches.length === 1) return matches[0]!;
   if (!allowPrompt) {
     throw new CompulsiveError(
@@ -382,9 +408,21 @@ async function openDestinationPicker(context: CliContext): Promise<void> {
     context.manager.search(),
     context.manager.searchWorkspaces(),
   ]);
+  const aliasesByRepository = new Map<string, string[]>();
+  for (const workspace of workspaces) {
+    for (const member of workspace.members) {
+      const aliases = aliasesByRepository.get(member.repositoryId) ?? [];
+      aliases.push(`${workspace.name}/${member.alias}`);
+      aliasesByRepository.set(member.repositoryId, aliases);
+    }
+  }
   const targets: NavigationTarget[] = [
     ...workspaces.map((workspace) => ({ kind: "workspace" as const, workspace })),
-    ...repositories.map((repository) => ({ kind: "repository" as const, repository })),
+    ...repositories.map((repository) => ({
+      kind: "repository" as const,
+      repository,
+      aliases: aliasesByRepository.get(repository.id) ?? [],
+    })),
   ];
   if (targets.length === 0) {
     context.stdout("No repositories or workspaces are registered.");

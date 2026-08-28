@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runCli } from "../src/cli.js";
 import { createRepositoryManager } from "../src/manager.js";
+import type { NavigationTarget } from "../src/terminal.js";
 import type { RepositoryRecord, WorkspaceRecord } from "../src/types.js";
 
 const execFileAsync = promisify(execFile);
@@ -157,14 +158,26 @@ describe("cpl workspace", () => {
     expect(updated.members).toMatchObject([{ mode: "worktree", branch: "feature/exact" }]);
   });
 
-  it("returns ambiguity exit code 4 for workspace queries outside a TTY", async () => {
+  it("prefers exact workspace names and returns exit code 4 for true ambiguity", async () => {
     const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
     await manager.initialize();
     await manager.createWorkspace({ name: "Client" });
     await manager.createWorkspace({ name: "Client Tools" });
+    const output: string[] = [];
     const errors: string[] = [];
 
-    const exitCode = await runCli(["workspace", "show", "Client"], {
+    expect(
+      await runCli(["workspace", "show", "Client", "--json"], {
+        manager,
+        stdout: (value) => output.push(value),
+        stderr: (value) => errors.push(value),
+        copyText: async () => undefined,
+        isTTY: false,
+      }),
+    ).toBe(0);
+    expect((JSON.parse(output.pop()!) as WorkspaceRecord).name).toBe("Client");
+
+    const exitCode = await runCli(["workspace", "show", "Clien"], {
       manager,
       stdout: () => undefined,
       stderr: (value) => errors.push(value),
@@ -180,9 +193,18 @@ describe("cpl workspace", () => {
     const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
     await manager.initialize();
     const workspace = await manager.createWorkspace({ name: "Interactive" });
+    const repositoryPath = join(sandbox, "repositories", "interactive-target");
+    await execFileAsync("git", ["init", "-q", repositoryPath]);
+    const repository = await manager.register({ path: repositoryPath });
+    await manager.addWorkspaceMember({
+      workspaceId: workspace.id,
+      repositoryId: repository.id,
+      alias: "前端's app",
+    });
     const copied: string[] = [];
     const workspaceMessages: string[] = [];
     const destinationMessages: string[] = [];
+    let destinationTargets: NavigationTarget[] = [];
     const context = {
       manager,
       stdout: () => undefined,
@@ -194,8 +216,9 @@ describe("cpl workspace", () => {
         workspaceMessages.push(message);
         return workspace;
       },
-      chooseDestination: async (message: string) => {
+      chooseDestination: async (message: string, targets: NavigationTarget[]) => {
         destinationMessages.push(message);
+        destinationTargets = targets;
         return { kind: "workspace" as const, workspace };
       },
       isTTY: true,
@@ -206,6 +229,9 @@ describe("cpl workspace", () => {
 
     expect(workspaceMessages).toEqual(["Search workspaces"]);
     expect(destinationMessages).toEqual(["Search repositories and workspaces"]);
+    expect(destinationTargets.find((target) => target.kind === "repository")?.aliases).toContain(
+      "Interactive/前端's app",
+    );
     expect(copied).toEqual([
       `cd -- '${await realpath(workspace.absolutePath)}'`,
       `cd -- '${await realpath(workspace.absolutePath)}'`,
