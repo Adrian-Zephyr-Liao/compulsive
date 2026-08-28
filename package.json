@@ -2,8 +2,23 @@
   "name": "@adrian-zephyr/compulsive",
   "version": "0.1.0",
   "description": "A safe local Git repository organizer and CLI.",
+  "keywords": [
+    "cli",
+    "developer-tools",
+    "git",
+    "repository-manager",
+    "workspace"
+  ],
+  "homepage": "https://github.com/Adrian-Zephyr-Liao/compulsive#readme",
+  "bugs": {
+    "url": "https://github.com/Adrian-Zephyr-Liao/compulsive/issues"
+  },
   "license": "MIT",
   "author": "Adrian Zephyr",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Adrian-Zephyr-Liao/compulsive.git"
+  },
   "bin": {
     "cpl": "./dist/bin.mjs"
   },
