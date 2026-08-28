@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { CompulsiveError } from "./errors.js";
@@ -58,13 +58,48 @@ export async function readConfig(path: string): Promise<ManagerConfig> {
     value.schemaVersion !== 1 ||
     !("rootDir" in value) ||
     typeof value.rootDir !== "string" ||
+    !isAbsolute(value.rootDir) ||
     !("scanRoots" in value) ||
     !Array.isArray(value.scanRoots) ||
-    !value.scanRoots.every((item) => typeof item === "string")
+    !value.scanRoots.every((item) => typeof item === "string" && isAbsolute(item))
   ) {
     throw new CompulsiveError("FILESYSTEM_FAILED", "Configuration has an unsupported format.");
   }
   return value as ManagerConfig;
+}
+
+function isSafeClassificationPath(value: unknown): value is string {
+  if (typeof value !== "string" || isAbsolute(value)) return false;
+  const segments = value.split("/");
+  return (
+    segments.length >= 2 &&
+    segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..")
+  );
+}
+
+function isRepositoryRecord(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.id === "string" &&
+    (record.kind === "remote" || record.kind === "local") &&
+    typeof record.name === "string" &&
+    record.name.length > 0 &&
+    isSafeClassificationPath(record.classificationPath) &&
+    typeof record.absolutePath === "string" &&
+    isAbsolute(record.absolutePath) &&
+    typeof record.isManaged === "boolean" &&
+    typeof record.registeredAt === "string" &&
+    typeof record.lastSeenAt === "string" &&
+    (record.canonicalRemote === undefined || typeof record.canonicalRemote === "string") &&
+    (record.remoteUrl === undefined ||
+      (typeof record.remoteUrl === "string" &&
+        !/^[a-z][a-z\d+.-]*:\/\/[^@/]+@/i.test(record.remoteUrl))) &&
+    (record.host === undefined || typeof record.host === "string") &&
+    (record.ownerPath === undefined ||
+      (Array.isArray(record.ownerPath) &&
+        record.ownerPath.every((item) => typeof item === "string")))
+  );
 }
 
 export async function readRegistry(path: string): Promise<RepositoryRegistry> {
@@ -75,7 +110,8 @@ export async function readRegistry(path: string): Promise<RepositoryRegistry> {
     !("schemaVersion" in value) ||
     value.schemaVersion !== 1 ||
     !("repositories" in value) ||
-    !Array.isArray(value.repositories)
+    !Array.isArray(value.repositories) ||
+    !value.repositories.every(isRepositoryRecord)
   ) {
     throw new CompulsiveError("FILESYSTEM_FAILED", "Repository index has an unsupported format.");
   }

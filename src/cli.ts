@@ -268,13 +268,15 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
       const result = await context.manager.discover(
         parsed.positionals.length > 0 ? { paths: parsed.positionals } : {},
       );
-      const output = parsed.flags.has("register")
-        ? await Promise.all(
-            result.repositories.map((repository) =>
-              context.manager.register({ path: repository.absolutePath }),
-            ),
-          )
-        : result.repositories;
+      let output: Array<RepositoryRecord | (typeof result.repositories)[number]> =
+        result.repositories;
+      if (parsed.flags.has("register")) {
+        const registered: RepositoryRecord[] = [];
+        for (const repository of result.repositories) {
+          registered.push(await context.manager.register({ path: repository.absolutePath }));
+        }
+        output = registered;
+      }
       if (json) printValue(context, output, true);
       else
         output.forEach((item) =>
@@ -301,6 +303,9 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
       const query = requireValue(parsed.positionals.join(" "), "Repository query");
       const record = await selectOne(context.manager, query, context, allowPrompt);
       const plan = await context.manager.planOrganize(record.id);
+      if (!json) {
+        plan.warnings.forEach((warning) => context.stderr(`Warning: ${warning}`));
+      }
       if (parsed.flags.has("dry-run")) {
         printValue(context, json ? plan : `${plan.source} -> ${plan.target}`, json);
         return;

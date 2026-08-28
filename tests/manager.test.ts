@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -238,5 +238,39 @@ describe("RepositoryManager state", () => {
     const record = await manager.register({ path: repositoryPath });
 
     await expect(manager.planOrganize(record.id)).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("rejects a tampered index whose classification escapes the managed root", async () => {
+    const repositoryPath = join(sandbox, "external", "tampered");
+    await execFileAsync("git", ["init", "-q", repositoryPath]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const record = await manager.register({ path: repositoryPath });
+    const registryPath = join(dataDir, "repositories.json");
+    const registry = JSON.parse(await readFile(registryPath, "utf8"));
+    registry.repositories[0].classificationPath = "../../outside";
+    await writeFile(registryPath, JSON.stringify(registry));
+
+    await expect(manager.planOrganize(record.id)).rejects.toMatchObject({
+      code: "FILESYSTEM_FAILED",
+    });
+  });
+
+  it("rolls a move back when the updated index cannot be persisted", async () => {
+    const repositoryPath = join(sandbox, "external", "rollback-me");
+    await execFileAsync("git", ["init", "-q", repositoryPath]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const record = await manager.register({ path: repositoryPath });
+    const plan = await manager.planOrganize(record.id);
+    await chmod(dataDir, 0o500);
+
+    try {
+      await expect(manager.organize(plan)).rejects.toMatchObject({ code: "FILESYSTEM_FAILED" });
+      await expect(access(repositoryPath)).resolves.toBeUndefined();
+      await expect(access(plan.target)).rejects.toThrow();
+    } finally {
+      await chmod(dataDir, 0o700);
+    }
   });
 });

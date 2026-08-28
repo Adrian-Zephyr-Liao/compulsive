@@ -259,6 +259,9 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
     const source = await realpath(record.absolutePath);
     const managedRoot = await realpath(config.rootDir);
     const target = join(managedRoot, ...record.classificationPath.split("/"));
+    if (!pathIsInside(managedRoot, target)) {
+      throw new CompulsiveError("FILESYSTEM_FAILED", "Repository classification escapes the root.");
+    }
     const isNoop = source === target;
     if (!isNoop && (pathIsInside(source, target) || pathIsInside(target, source))) {
       throw new CompulsiveError("CONFLICT", "Source and target repositories cannot be nested.");
@@ -330,7 +333,20 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
       lastSeenAt: new Date().toISOString(),
     };
     registry.repositories[recordIndex] = updated;
-    await writeJsonAtomic(paths.registry, registry);
+    try {
+      await writeJsonAtomic(paths.registry, registry);
+    } catch (error) {
+      try {
+        await rename(currentPlan.target, currentPlan.source);
+      } catch (rollbackError) {
+        throw new CompulsiveError(
+          "FILESYSTEM_FAILED",
+          "Index update failed and the repository move could not be rolled back.",
+          { cause: error, rollbackError },
+        );
+      }
+      throw error;
+    }
     return updated;
   }
 

@@ -38,7 +38,7 @@
     "dev": "vp pack --watch",
     "test": "vp test --run",
     "check": "vp check",
-    "prepublishOnly": "vp run build"
+    "prepublishOnly": "vp check && vp test --run && vp pack --publint --attw"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",

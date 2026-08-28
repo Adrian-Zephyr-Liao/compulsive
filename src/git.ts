@@ -6,6 +6,10 @@ import { CompulsiveError } from "./errors.js";
 
 const execFileAsync = promisify(execFile);
 
+export function redactGitError(message: string): string {
+  return message.replace(/([a-z][a-z\d+.-]*:\/\/)[^@\s/]+@/gi, "$1[redacted]@");
+}
+
 export async function runGit(
   arguments_: string[],
   options: { cwd?: string; allowFailure?: boolean } = {},
@@ -22,13 +26,14 @@ export async function runGit(
     if (options.allowFailure) {
       return {
         stdout: failure.stdout?.trim() ?? "",
-        stderr: failure.stderr?.trim() ?? failure.message,
+        stderr: redactGitError(failure.stderr?.trim() ?? failure.message),
         exitCode: typeof failure.code === "number" ? failure.code : 1,
       };
     }
-    throw new CompulsiveError("GIT_FAILED", failure.stderr?.trim() || failure.message, {
-      arguments: arguments_,
-    });
+    throw new CompulsiveError(
+      "GIT_FAILED",
+      redactGitError(failure.stderr?.trim() || failure.message),
+    );
   }
 }
 
