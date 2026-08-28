@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdtemp, realpath, rm } from "node:fs/promises";
+import { access, mkdtemp, realpath, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -210,5 +210,42 @@ describe("cpl workspace", () => {
       `cd -- '${await realpath(workspace.absolutePath)}'`,
       `cd -- '${await realpath(workspace.absolutePath)}'`,
     ]);
+  });
+
+  it("reports a broken workspace link through doctor without repairing it", async () => {
+    const repositoryPath = join(sandbox, "repositories", "doctor-link");
+    await execFileAsync("git", ["init", "-q", repositoryPath]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const repository = await manager.register({ path: repositoryPath });
+    const workspace = await manager.createWorkspace({ name: "Doctor" });
+    await manager.addWorkspaceMember({
+      workspaceId: workspace.id,
+      repositoryId: repository.id,
+    });
+    const memberPath = join(workspace.absolutePath, repository.name);
+    await unlink(memberPath);
+    const output: string[] = [];
+    const errors: string[] = [];
+
+    const exitCode = await runCli(["doctor", "--json"], {
+      manager,
+      stdout: (value) => output.push(value),
+      stderr: (value) => errors.push(value),
+      copyText: async () => undefined,
+      isTTY: false,
+    });
+
+    expect(exitCode).toBe(5);
+    expect(JSON.parse(output.join("\n"))).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: `workspace:${workspace.name}/${repository.name}`,
+          ok: false,
+        }),
+      ]),
+    );
+    await expect(access(memberPath)).rejects.toThrow();
+    expect(errors.join("\n")).toContain("FILESYSTEM_FAILED");
   });
 });

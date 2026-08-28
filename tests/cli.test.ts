@@ -246,12 +246,15 @@ describe("cpl CLI", () => {
       isTTY: false,
     };
     const alternateRoot = join(sandbox, "alternate-source");
+    const alternateWorkspaceRoot = join(sandbox, "team-workspaces");
     const scanRoot = join(sandbox, "projects");
 
     expect(await runCli(["config", "set-root", alternateRoot], context)).toBe(0);
+    expect(await runCli(["config", "set-workspace-root", alternateWorkspaceRoot], context)).toBe(0);
     expect(await runCli(["config", "add-scan-root", scanRoot], context)).toBe(0);
     expect(await manager.getConfig()).toMatchObject({
       rootDir: alternateRoot,
+      workspaceRoot: alternateWorkspaceRoot,
       scanRoots: [scanRoot],
     });
     output.length = 0;
@@ -289,11 +292,13 @@ describe("cpl CLI", () => {
   it("uses an explicit TypeScript config for first initialization", async () => {
     const configPath = join(sandbox, "compulsive.config.ts");
     const configuredRoot = join(sandbox, "configured-source");
+    const configuredWorkspaceRoot = join(sandbox, "configured-workspaces");
     const configuredScanRoot = join(sandbox, "projects");
     await writeFile(
       configPath,
       `export default {
         rootDir: ${JSON.stringify(configuredRoot)},
+        workspaceRoot: ${JSON.stringify(configuredWorkspaceRoot)},
         scanRoots: [${JSON.stringify(configuredScanRoot)}],
         ui: { color: "never", unicode: false },
       }`,
@@ -317,6 +322,7 @@ describe("cpl CLI", () => {
 
     expect(JSON.parse(output.join("\n"))).toMatchObject({
       rootDir: configuredRoot,
+      workspaceRoot: configuredWorkspaceRoot,
       scanRoots: [configuredScanRoot],
     });
   });
