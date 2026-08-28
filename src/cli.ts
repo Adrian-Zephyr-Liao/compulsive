@@ -1,10 +1,7 @@
-#!/usr/bin/env node
-
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { pathToFileURL } from "node:url";
 
 import { copyTextToClipboard } from "./clipboard.js";
 import { CompulsiveError, type CompulsiveErrorCode } from "./errors.js";
@@ -371,11 +368,4 @@ export async function runCli(argv: string[], overrides: Partial<CliContext> = {}
     );
     return exitCodeFor(failure);
   }
-}
-
-const executable = process.argv[1];
-if (executable && import.meta.url === pathToFileURL(executable).href) {
-  void runCli(process.argv.slice(2)).then((exitCode) => {
-    process.exitCode = exitCode;
-  });
 }

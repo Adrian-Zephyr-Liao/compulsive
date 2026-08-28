@@ -5,7 +5,7 @@
   "license": "MIT",
   "author": "Adrian Zephyr",
   "bin": {
-    "cpl": "./dist/cli.mjs"
+    "cpl": "./dist/bin.mjs"
   },
   "files": [
     "dist",
@@ -49,14 +49,8 @@
     "vite-plus": "^0.2.8",
     "vitest": "^4.1.10"
   },
-  "devEngines": {
-    "packageManager": {
-      "name": "pnpm",
-      "version": "11.24.0",
-      "onFail": "download"
-    }
-  },
   "engines": {
     "node": ">=22.18.0"
-  }
+  },
+  "packageManager": "pnpm@11.24.0"
 }
