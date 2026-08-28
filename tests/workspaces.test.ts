@@ -310,4 +310,168 @@ describe("workspace state", () => {
     expect(await realpath(memberPath)).toBe(await realpath(otherPath));
     await expect(manager.searchWorkspaces({ query: workspace.name })).resolves.toEqual([updated]);
   });
+
+  it("creates independent worktree members on existing branches", async () => {
+    const repositoryPath = join(sandbox, "repositories", "branching");
+    await execFileAsync("git", ["init", "-q", "-b", "main", repositoryPath]);
+    await execFileAsync("git", ["-C", repositoryPath, "config", "user.name", "Compulsive Test"]);
+    await execFileAsync("git", ["-C", repositoryPath, "config", "user.email", "test@example.com"]);
+    await writeFile(join(repositoryPath, "README.md"), "initial\n");
+    await execFileAsync("git", ["-C", repositoryPath, "add", "README.md"]);
+    await execFileAsync("git", ["-C", repositoryPath, "commit", "-q", "-m", "initial"]);
+    await execFileAsync("git", ["-C", repositoryPath, "branch", "feature/one"]);
+    await execFileAsync("git", ["-C", repositoryPath, "branch", "feature/two"]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const repository = await manager.register({ path: repositoryPath });
+    const first = await manager.createWorkspace({ name: "First Branch" });
+    const second = await manager.createWorkspace({ name: "Second Branch" });
+
+    const firstUpdated = await manager.addWorkspaceMember({
+      workspaceId: first.id,
+      repositoryId: repository.id,
+      alias: "app",
+      mode: "worktree",
+      branch: "feature/one",
+    });
+    const secondUpdated = await manager.addWorkspaceMember({
+      workspaceId: second.id,
+      repositoryId: repository.id,
+      alias: "app",
+      mode: "worktree",
+      branch: "feature/two",
+    });
+
+    expect(firstUpdated.members[0]).toMatchObject({ mode: "worktree", branch: "feature/one" });
+    expect(secondUpdated.members[0]).toMatchObject({ mode: "worktree", branch: "feature/two" });
+    expect(
+      (
+        await execFileAsync("git", [
+          "-C",
+          join(first.absolutePath, "app"),
+          "branch",
+          "--show-current",
+        ])
+      ).stdout.trim(),
+    ).toBe("feature/one");
+    expect(
+      (
+        await execFileAsync("git", [
+          "-C",
+          join(second.absolutePath, "app"),
+          "branch",
+          "--show-current",
+        ])
+      ).stdout.trim(),
+    ).toBe("feature/two");
+  });
+
+  it("creates the exact requested branch only with explicit authorization", async () => {
+    const repositoryPath = join(sandbox, "repositories", "new-branch");
+    await execFileAsync("git", ["init", "-q", "-b", "main", repositoryPath]);
+    await execFileAsync("git", ["-C", repositoryPath, "config", "user.name", "Compulsive Test"]);
+    await execFileAsync("git", ["-C", repositoryPath, "config", "user.email", "test@example.com"]);
+    await writeFile(join(repositoryPath, "README.md"), "initial\n");
+    await execFileAsync("git", ["-C", repositoryPath, "add", "README.md"]);
+    await execFileAsync("git", ["-C", repositoryPath, "commit", "-q", "-m", "initial"]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const repository = await manager.register({ path: repositoryPath });
+    const workspace = await manager.createWorkspace({ name: "Exact Branch" });
+
+    await manager.addWorkspaceMember({
+      workspaceId: workspace.id,
+      repositoryId: repository.id,
+      mode: "worktree",
+      branch: "feature/exact-name",
+      createBranch: true,
+    });
+
+    expect(
+      (
+        await execFileAsync("git", [
+          "-C",
+          repositoryPath,
+          "show-ref",
+          "--verify",
+          "refs/heads/feature/exact-name",
+        ])
+      ).stdout,
+    ).not.toBe("");
+  });
+
+  it("surfaces a conflict when a branch is already checked out elsewhere", async () => {
+    const repositoryPath = join(sandbox, "repositories", "branch-conflict");
+    await execFileAsync("git", ["init", "-q", "-b", "main", repositoryPath]);
+    await execFileAsync("git", ["-C", repositoryPath, "config", "user.name", "Compulsive Test"]);
+    await execFileAsync("git", ["-C", repositoryPath, "config", "user.email", "test@example.com"]);
+    await writeFile(join(repositoryPath, "README.md"), "initial\n");
+    await execFileAsync("git", ["-C", repositoryPath, "add", "README.md"]);
+    await execFileAsync("git", ["-C", repositoryPath, "commit", "-q", "-m", "initial"]);
+    await execFileAsync("git", ["-C", repositoryPath, "branch", "shared"]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const repository = await manager.register({ path: repositoryPath });
+    const first = await manager.createWorkspace({ name: "Uses Shared" });
+    const second = await manager.createWorkspace({ name: "Also Shared" });
+    await manager.addWorkspaceMember({
+      workspaceId: first.id,
+      repositoryId: repository.id,
+      mode: "worktree",
+      branch: "shared",
+    });
+
+    await expect(
+      manager.addWorkspaceMember({
+        workspaceId: second.id,
+        repositoryId: repository.id,
+        mode: "worktree",
+        branch: "shared",
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(manager.searchWorkspaces({ query: second.name })).resolves.toMatchObject([
+      { members: [] },
+    ]);
+  });
+
+  it("refuses dirty worktree removal and deletion, then deletes it when clean", async () => {
+    const repositoryPath = join(sandbox, "repositories", "dirty-guard");
+    await execFileAsync("git", ["init", "-q", "-b", "main", repositoryPath]);
+    await execFileAsync("git", ["-C", repositoryPath, "config", "user.name", "Compulsive Test"]);
+    await execFileAsync("git", ["-C", repositoryPath, "config", "user.email", "test@example.com"]);
+    await writeFile(join(repositoryPath, "README.md"), "initial\n");
+    await execFileAsync("git", ["-C", repositoryPath, "add", "README.md"]);
+    await execFileAsync("git", ["-C", repositoryPath, "commit", "-q", "-m", "initial"]);
+    await execFileAsync("git", ["-C", repositoryPath, "branch", "workspace-branch"]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const repository = await manager.register({ path: repositoryPath });
+    const workspace = await manager.createWorkspace({ name: "Dirty Guard" });
+    const updated = await manager.addWorkspaceMember({
+      workspaceId: workspace.id,
+      repositoryId: repository.id,
+      mode: "worktree",
+      branch: "workspace-branch",
+    });
+    const worktreePath = join(workspace.absolutePath, repository.name);
+    await writeFile(join(worktreePath, "uncommitted.txt"), "do not lose\n");
+
+    await expect(
+      manager.removeWorkspaceMember({
+        workspaceId: workspace.id,
+        repositoryId: repository.id,
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(manager.deleteWorkspace(workspace.id)).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(readFile(join(worktreePath, "uncommitted.txt"), "utf8")).resolves.toBe(
+      "do not lose\n",
+    );
+    await expect(manager.searchWorkspaces({ query: workspace.name })).resolves.toEqual([updated]);
+
+    await unlink(join(worktreePath, "uncommitted.txt"));
+    await manager.deleteWorkspace(workspace.id);
+
+    await expect(access(worktreePath)).rejects.toThrow();
+    await expect(access(join(repositoryPath, ".git"))).resolves.toBeUndefined();
+  });
 });

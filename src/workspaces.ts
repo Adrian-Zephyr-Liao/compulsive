@@ -13,6 +13,7 @@ import {
 import { isAbsolute, join, resolve } from "node:path";
 
 import { CompulsiveError } from "./errors.js";
+import { runGit } from "./git.js";
 import {
   fileExists,
   readConfig,
@@ -212,13 +213,86 @@ async function verifyManagedLink(memberPath: string, repositoryPath: string): Pr
   return target;
 }
 
+async function gitCommonDirectory(path: string): Promise<string> {
+  const result = await runGit(["rev-parse", "--git-common-dir"], { cwd: path });
+  return realpath(isAbsolute(result.stdout) ? result.stdout : resolve(path, result.stdout));
+}
+
+async function verifyManagedWorktree(
+  memberPath: string,
+  repositoryPath: string,
+  branch: string,
+): Promise<void> {
+  if (!(await pathEntryExists(memberPath))) {
+    throw new CompulsiveError("CONFLICT", `Managed Git worktree is missing: ${memberPath}`);
+  }
+  const entry = await lstat(memberPath);
+  if (!entry.isDirectory() || entry.isSymbolicLink()) {
+    throw new CompulsiveError("CONFLICT", `Workspace member is not a Git worktree: ${memberPath}`);
+  }
+  try {
+    const [memberRoot, memberCommon, repositoryCommon, currentBranch] = await Promise.all([
+      runGit(["rev-parse", "--show-toplevel"], { cwd: memberPath }),
+      gitCommonDirectory(memberPath),
+      gitCommonDirectory(repositoryPath),
+      runGit(["branch", "--show-current"], { cwd: memberPath }),
+    ]);
+    if (
+      (await realpath(memberRoot.stdout)) !== (await realpath(memberPath)) ||
+      memberCommon !== repositoryCommon ||
+      currentBranch.stdout !== branch
+    ) {
+      throw new CompulsiveError(
+        "CONFLICT",
+        `Workspace worktree identity is unexpected: ${memberPath}`,
+      );
+    }
+  } catch (error) {
+    if (error instanceof CompulsiveError && error.code === "CONFLICT") throw error;
+    throw new CompulsiveError(
+      "CONFLICT",
+      `Workspace member is not the expected worktree: ${memberPath}`,
+      {
+        cause: error,
+      },
+    );
+  }
+}
+
+async function assertCleanWorktree(memberPath: string): Promise<void> {
+  const status = await runGit(["status", "--porcelain"], { cwd: memberPath });
+  if (status.stdout) {
+    throw new CompulsiveError("CONFLICT", `Git worktree has uncommitted changes: ${memberPath}`);
+  }
+}
+
+async function addGitWorktree(
+  repositoryPath: string,
+  memberPath: string,
+  branch: string,
+  createBranch: boolean,
+): Promise<void> {
+  const arguments_ = ["-C", repositoryPath, "worktree", "add"];
+  if (createBranch) arguments_.push("-b", branch, "--", memberPath);
+  else arguments_.push("--", memberPath, branch);
+  try {
+    await runGit(arguments_);
+  } catch (error) {
+    if (error instanceof CompulsiveError && error.code === "GIT_FAILED") {
+      throw new CompulsiveError("CONFLICT", error.message, error.details);
+    }
+    throw error;
+  }
+}
+
+async function removeGitWorktree(repositoryPath: string, memberPath: string): Promise<void> {
+  await runGit(["-C", repositoryPath, "worktree", "remove", "--", memberPath]);
+}
+
 export async function addWorkspaceMember(
   paths: StoragePaths,
   input: AddWorkspaceMemberInput,
 ): Promise<WorkspaceRecord> {
-  if (input.mode === "worktree") {
-    throw new CompulsiveError("INVALID_INPUT", "Worktree members are not available yet.");
-  }
   await readConfig(paths.config);
   const [workspaceRegistry, repositoryRegistry] = await Promise.all([
     readWorkspaceRegistry(paths.workspaces),
@@ -239,8 +313,28 @@ export async function addWorkspaceMember(
     throw new CompulsiveError("CONFLICT", `Workspace member path already exists: ${memberPath}`);
   }
 
-  await createVerifiedLink(memberPath, repository.absolutePath);
-  const member: WorkspaceMember = { repositoryId: repository.id, alias, mode: "link" };
+  let member: WorkspaceMember;
+  if (input.mode === "worktree") {
+    const branch = input.branch.trim();
+    if (!branch) throw new CompulsiveError("INVALID_INPUT", "Worktree branch is required.");
+    await addGitWorktree(repository.absolutePath, memberPath, branch, input.createBranch === true);
+    try {
+      await verifyManagedWorktree(memberPath, repository.absolutePath, branch);
+    } catch (error) {
+      await removeGitWorktree(repository.absolutePath, memberPath).catch(() => undefined);
+      throw error;
+    }
+    member = {
+      repositoryId: repository.id,
+      alias,
+      mode: "worktree",
+      branch,
+      worktreePath: await realpath(memberPath),
+    };
+  } else {
+    await createVerifiedLink(memberPath, repository.absolutePath);
+    member = { repositoryId: repository.id, alias, mode: "link" };
+  }
   const updated: WorkspaceRecord = {
     ...workspace,
     members: [...workspace.members, member],
@@ -250,7 +344,20 @@ export async function addWorkspaceMember(
   try {
     await writeJsonAtomic(paths.workspaces, workspaceRegistry);
   } catch (error) {
-    await unlink(memberPath).catch(() => undefined);
+    try {
+      if (member.mode === "worktree") {
+        await assertCleanWorktree(memberPath);
+        await removeGitWorktree(repository.absolutePath, memberPath);
+      } else {
+        await unlink(memberPath);
+      }
+    } catch (rollbackError) {
+      throw new CompulsiveError(
+        "FILESYSTEM_FAILED",
+        "Workspace index update failed and the new member could not be rolled back.",
+        { cause: error, rollbackError },
+      );
+    }
     throw error;
   }
   return updated;
@@ -272,13 +379,17 @@ export async function removeWorkspaceMember(
     throw new CompulsiveError("NOT_FOUND", "Repository is not a member of this workspace.");
   }
   const member = workspace.members[memberIndex]!;
-  if (member.mode === "worktree") {
-    throw new CompulsiveError("INVALID_INPUT", "Worktree members are not available yet.");
-  }
   const repository = findRepository(repositoryRegistry.repositories, member.repositoryId);
   const memberPath = join(workspace.absolutePath, member.alias);
-  const target = await verifyManagedLink(memberPath, repository.absolutePath);
-  await unlink(memberPath);
+  let linkTarget: string | undefined;
+  if (member.mode === "worktree") {
+    await verifyManagedWorktree(memberPath, repository.absolutePath, member.branch);
+    await assertCleanWorktree(memberPath);
+    await removeGitWorktree(repository.absolutePath, memberPath);
+  } else {
+    linkTarget = await verifyManagedLink(memberPath, repository.absolutePath);
+    await unlink(memberPath);
+  }
   const updated: WorkspaceRecord = {
     ...workspace,
     members: workspace.members.filter((_, candidateIndex) => candidateIndex !== memberIndex),
@@ -288,7 +399,19 @@ export async function removeWorkspaceMember(
   try {
     await writeJsonAtomic(paths.workspaces, workspaceRegistry);
   } catch (error) {
-    await symlink(target, memberPath).catch(() => undefined);
+    try {
+      if (member.mode === "worktree") {
+        await addGitWorktree(repository.absolutePath, memberPath, member.branch, false);
+      } else {
+        await symlink(linkTarget!, memberPath);
+      }
+    } catch (rollbackError) {
+      throw new CompulsiveError(
+        "FILESYSTEM_FAILED",
+        "Workspace index update failed and the removed member could not be restored.",
+        { cause: error, rollbackError },
+      );
+    }
     throw error;
   }
   return updated;
@@ -308,7 +431,6 @@ export async function syncWorkspace(
   const rollbacks: Array<() => Promise<void>> = [];
 
   for (const member of workspace.members) {
-    if (member.mode !== "link") continue;
     const repository = repositoryRegistry.repositories.find(
       (record) => record.id === member.repositoryId,
     );
@@ -319,6 +441,19 @@ export async function syncWorkspace(
         code: "MISSING_REPOSITORY",
         message: "Referenced repository is not registered.",
       });
+      continue;
+    }
+    if (member.mode === "worktree") {
+      try {
+        await verifyManagedWorktree(member.worktreePath, repository.absolutePath, member.branch);
+      } catch (error) {
+        issues.push({
+          repositoryId: member.repositoryId,
+          alias: member.alias,
+          code: "CONFLICT",
+          message: error instanceof Error ? error.message : "Git worktree verification failed.",
+        });
+      }
       continue;
     }
     const memberPath = join(workspace.absolutePath, member.alias);
@@ -390,9 +525,18 @@ export async function deleteWorkspace(paths: StoragePaths, id: WorkspaceId): Pro
   ]);
   const { index, workspace } = findWorkspace(workspaceRegistry, id);
   const links: Array<{ path: string; target: string }> = [];
+  const worktrees: Array<{ path: string; branch: string; repositoryPath: string }> = [];
   for (const member of workspace.members) {
     if (member.mode === "worktree") {
-      throw new CompulsiveError("INVALID_INPUT", "Worktree members are not available yet.");
+      const repository = findRepository(repositoryRegistry.repositories, member.repositoryId);
+      await verifyManagedWorktree(member.worktreePath, repository.absolutePath, member.branch);
+      await assertCleanWorktree(member.worktreePath);
+      worktrees.push({
+        path: member.worktreePath,
+        branch: member.branch,
+        repositoryPath: repository.absolutePath,
+      });
+      continue;
     }
     const repository = findRepository(repositoryRegistry.repositories, member.repositoryId);
     const path = join(workspace.absolutePath, member.alias);
@@ -400,14 +544,24 @@ export async function deleteWorkspace(paths: StoragePaths, id: WorkspaceId): Pro
   }
 
   const removed: Array<{ path: string; target: string }> = [];
+  const removedWorktrees: Array<{ path: string; branch: string; repositoryPath: string }> = [];
   try {
     for (const link of links) {
       await unlink(link.path);
       removed.push(link);
     }
+    for (const worktree of worktrees) {
+      await removeGitWorktree(worktree.repositoryPath, worktree.path);
+      removedWorktrees.push(worktree);
+    }
     workspaceRegistry.workspaces.splice(index, 1);
     await writeJsonAtomic(paths.workspaces, workspaceRegistry);
   } catch (error) {
+    for (const worktree of removedWorktrees.reverse()) {
+      await addGitWorktree(worktree.repositoryPath, worktree.path, worktree.branch, false).catch(
+        () => undefined,
+      );
+    }
     for (const link of removed.reverse())
       await symlink(link.target, link.path).catch(() => undefined);
     throw error;
