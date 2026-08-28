@@ -9,6 +9,7 @@ export type TerminalColorMode = "auto" | "always" | "never";
 
 export interface CompulsiveFileConfig {
   rootDir?: string;
+  workspaceRoot?: string;
   scanRoots?: string[];
   ui?: {
     color?: TerminalColorMode;
@@ -48,11 +49,14 @@ function validateConfig(value: unknown, path: string): CompulsiveFileConfig {
     throw new CompulsiveError("INVALID_INPUT", `Configuration must be an object: ${path}`);
   }
   const config = value as Record<string, unknown>;
-  if (!hasOnlyKeys(config, ["$schema", "rootDir", "scanRoots", "ui"])) {
+  if (!hasOnlyKeys(config, ["$schema", "rootDir", "workspaceRoot", "scanRoots", "ui"])) {
     throw new CompulsiveError("INVALID_INPUT", `Configuration contains unknown fields: ${path}`);
   }
   if (config.rootDir !== undefined && typeof config.rootDir !== "string") {
     throw new CompulsiveError("INVALID_INPUT", `rootDir must be a string: ${path}`);
+  }
+  if (config.workspaceRoot !== undefined && typeof config.workspaceRoot !== "string") {
+    throw new CompulsiveError("INVALID_INPUT", `workspaceRoot must be a string: ${path}`);
   }
   if (
     config.scanRoots !== undefined &&
@@ -118,6 +122,15 @@ export async function loadCompulsiveConfig(
         ...(config.rootDir === undefined
           ? {}
           : { rootDir: resolveConfiguredPath(config.rootDir, baseDirectory, homeDirectory) }),
+        ...(config.workspaceRoot === undefined
+          ? {}
+          : {
+              workspaceRoot: resolveConfiguredPath(
+                config.workspaceRoot,
+                baseDirectory,
+                homeDirectory,
+              ),
+            }),
         ...(config.scanRoots === undefined
           ? {}
           : {

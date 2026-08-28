@@ -1,20 +1,22 @@
 import { constants } from "node:fs";
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { CompulsiveError } from "./errors.js";
-import type { ManagerConfig, RepositoryRegistry } from "./types.js";
+import type { ManagerConfig, RepositoryRegistry, WorkspaceRegistry } from "./types.js";
 
 export interface StoragePaths {
   config: string;
   registry: string;
+  workspaces: string;
 }
 
 export function createStoragePaths(dataDir: string): StoragePaths {
   return {
     config: join(dataDir, "config.json"),
     registry: join(dataDir, "repositories.json"),
+    workspaces: join(dataDir, "workspaces.json"),
   };
 }
 
@@ -61,11 +63,17 @@ export async function readConfig(path: string): Promise<ManagerConfig> {
     !isAbsolute(value.rootDir) ||
     !("scanRoots" in value) ||
     !Array.isArray(value.scanRoots) ||
-    !value.scanRoots.every((item) => typeof item === "string" && isAbsolute(item))
+    !value.scanRoots.every((item) => typeof item === "string" && isAbsolute(item)) ||
+    ("workspaceRoot" in value &&
+      (typeof value.workspaceRoot !== "string" || !isAbsolute(value.workspaceRoot)))
   ) {
     throw new CompulsiveError("FILESYSTEM_FAILED", "Configuration has an unsupported format.");
   }
-  return value as ManagerConfig;
+  const config = value as Omit<ManagerConfig, "workspaceRoot"> & { workspaceRoot?: string };
+  return {
+    ...config,
+    workspaceRoot: config.workspaceRoot ?? join(dirname(config.rootDir), "Workspaces"),
+  };
 }
 
 function isSafeClassificationPath(value: unknown): value is string {
@@ -116,4 +124,84 @@ export async function readRegistry(path: string): Promise<RepositoryRegistry> {
     throw new CompulsiveError("FILESYSTEM_FAILED", "Repository index has an unsupported format.");
   }
   return value as RepositoryRegistry;
+}
+
+function isSafePathSegment(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value !== "." &&
+    value !== ".." &&
+    !value.includes("/") &&
+    !value.includes("\\") &&
+    !value.includes("\0")
+  );
+}
+
+function isWorkspaceMember(value: unknown, workspacePath: string): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const member = value as Record<string, unknown>;
+  if (
+    typeof member.repositoryId !== "string" ||
+    !isSafePathSegment(member.alias) ||
+    (member.mode !== "link" && member.mode !== "worktree")
+  ) {
+    return false;
+  }
+  if (member.mode === "link") return true;
+  return (
+    typeof member.branch === "string" &&
+    member.branch.length > 0 &&
+    typeof member.worktreePath === "string" &&
+    isAbsolute(member.worktreePath) &&
+    resolve(member.worktreePath) === resolve(workspacePath, member.alias)
+  );
+}
+
+function isWorkspaceRecord(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const workspace = value as Record<string, unknown>;
+  const workspacePath = workspace.absolutePath;
+  if (
+    typeof workspace.id !== "string" ||
+    !isSafePathSegment(workspace.name) ||
+    typeof workspacePath !== "string" ||
+    !isAbsolute(workspacePath) ||
+    !Array.isArray(workspace.members) ||
+    typeof workspace.createdAt !== "string" ||
+    typeof workspace.updatedAt !== "string" ||
+    !workspace.members.every((member) => isWorkspaceMember(member, workspacePath))
+  ) {
+    return false;
+  }
+  const members = workspace.members as Array<Record<string, unknown>>;
+  return (
+    new Set(members.map((member) => String(member.repositoryId))).size === members.length &&
+    new Set(members.map((member) => String(member.alias).toLowerCase())).size === members.length
+  );
+}
+
+export async function readWorkspaceRegistry(path: string): Promise<WorkspaceRegistry> {
+  const value = await readJson(path);
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("schemaVersion" in value) ||
+    value.schemaVersion !== 1 ||
+    !("workspaces" in value) ||
+    !Array.isArray(value.workspaces) ||
+    !value.workspaces.every(isWorkspaceRecord)
+  ) {
+    throw new CompulsiveError("FILESYSTEM_FAILED", "Workspace index has an unsupported format.");
+  }
+  const registry = value as WorkspaceRegistry;
+  if (
+    new Set(registry.workspaces.map((workspace) => workspace.name.toLowerCase())).size !==
+      registry.workspaces.length ||
+    new Set(registry.workspaces.map((workspace) => resolve(workspace.absolutePath))).size !==
+      registry.workspaces.length
+  ) {
+    throw new CompulsiveError("FILESYSTEM_FAILED", "Workspace index contains duplicate entries.");
+  }
+  return registry;
 }

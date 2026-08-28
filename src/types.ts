@@ -1,5 +1,7 @@
 export type RepositoryId = string & { readonly __brand: "RepositoryId" };
 export type RepositoryKind = "remote" | "local";
+export type WorkspaceId = string & { readonly __brand: "WorkspaceId" };
+export type WorkspaceMemberMode = "link" | "worktree";
 
 export interface RepositoryClassification {
   kind: "remote";
@@ -13,7 +15,36 @@ export interface RepositoryClassification {
 export interface ManagerConfig {
   schemaVersion: 1;
   rootDir: string;
+  workspaceRoot: string;
   scanRoots: string[];
+}
+
+export type WorkspaceMember =
+  | {
+      repositoryId: RepositoryId;
+      alias: string;
+      mode: "link";
+    }
+  | {
+      repositoryId: RepositoryId;
+      alias: string;
+      mode: "worktree";
+      branch: string;
+      worktreePath: string;
+    };
+
+export interface WorkspaceRecord {
+  id: WorkspaceId;
+  name: string;
+  absolutePath: string;
+  members: WorkspaceMember[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkspaceRegistry {
+  schemaVersion: 1;
+  workspaces: WorkspaceRecord[];
 }
 
 export interface RepositoryRecord {
@@ -38,11 +69,13 @@ export interface RepositoryRegistry {
 
 export interface InitializeInput {
   rootDir?: string;
+  workspaceRoot?: string;
   scanRoots?: string[];
 }
 
 export interface UpdateConfigInput {
   rootDir?: string;
+  workspaceRoot?: string;
   scanRoots?: string[];
 }
 

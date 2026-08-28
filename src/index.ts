@@ -27,4 +27,9 @@ export type {
   RepositoryRecord,
   SearchRepositoriesInput,
   UpdateConfigInput,
+  WorkspaceId,
+  WorkspaceMember,
+  WorkspaceMemberMode,
+  WorkspaceRecord,
+  WorkspaceRegistry,
 } from "./types.js";

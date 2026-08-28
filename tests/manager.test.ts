@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { access, chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
@@ -33,13 +33,21 @@ describe("RepositoryManager state", () => {
     const first = await manager.initialize();
     const second = await manager.initialize({ rootDir: join(sandbox, "different") });
 
-    expect(first).toEqual({ schemaVersion: 1, rootDir, scanRoots: [] });
+    expect(first).toEqual({
+      schemaVersion: 1,
+      rootDir,
+      workspaceRoot: join(dirname(rootDir), "Workspaces"),
+      scanRoots: [],
+    });
     expect(second).toEqual(first);
     await expect(readFile(join(dataDir, "config.json"), "utf8")).resolves.toContain(
       '"schemaVersion": 1',
     );
     await expect(readFile(join(dataDir, "repositories.json"), "utf8")).resolves.toContain(
       '"repositories": []',
+    );
+    await expect(readFile(join(dataDir, "workspaces.json"), "utf8")).resolves.toContain(
+      '"workspaces": []',
     );
   });
 

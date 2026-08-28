@@ -28,6 +28,7 @@ describe("loadCompulsiveConfig", () => {
       `{
         // Paths are resolved from this file.
         "rootDir": "./source",
+        "workspaceRoot": "./groups",
         "scanRoots": ["~/Projects", "./legacy",],
         "ui": { "color": "always", "unicode": false, },
       }`,
@@ -38,6 +39,7 @@ describe("loadCompulsiveConfig", () => {
       path: join(canonicalProjectDir, "compulsive.config.jsonc"),
       config: {
         rootDir: join(canonicalProjectDir, "source"),
+        workspaceRoot: join(canonicalProjectDir, "groups"),
         scanRoots: [join(homeDir, "Projects"), join(canonicalProjectDir, "legacy")],
         ui: { color: "always", unicode: false },
       },
@@ -64,7 +66,10 @@ describe("loadCompulsiveConfig", () => {
   });
 
   it("exports a typed defineConfig helper", () => {
-    expect(defineConfig({ ui: { color: "never" } })).toEqual({ ui: { color: "never" } });
+    expect(defineConfig({ workspaceRoot: "./groups", ui: { color: "never" } })).toEqual({
+      workspaceRoot: "./groups",
+      ui: { color: "never" },
+    });
   });
 
   it("prefers an explicit config file and reports missing files", async () => {

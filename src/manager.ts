@@ -137,25 +137,35 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
   const defaultRootDir = resolve(options.defaultRootDir ?? join(homedir(), "Desktop", "源码"));
   const paths = createStoragePaths(dataDir);
 
-  async function initialize(input: { rootDir?: string; scanRoots?: string[] } = {}) {
+  async function initialize(
+    input: { rootDir?: string; workspaceRoot?: string; scanRoots?: string[] } = {},
+  ) {
     if (await fileExists(paths.config)) {
       const existing = await readConfig(paths.config);
       await mkdir(existing.rootDir, { recursive: true });
+      await mkdir(existing.workspaceRoot, { recursive: true });
       if (!(await fileExists(paths.registry))) {
         await writeJsonAtomic(paths.registry, { schemaVersion: 1, repositories: [] });
+      }
+      if (!(await fileExists(paths.workspaces))) {
+        await writeJsonAtomic(paths.workspaces, { schemaVersion: 1, workspaces: [] });
       }
       return existing;
     }
 
+    const rootDir = resolve(input.rootDir ?? defaultRootDir);
     const config: ManagerConfig = {
       schemaVersion: 1,
-      rootDir: resolve(input.rootDir ?? defaultRootDir),
+      rootDir,
+      workspaceRoot: resolve(input.workspaceRoot ?? join(dirname(rootDir), "Workspaces")),
       scanRoots: (input.scanRoots ?? []).map((item) => resolve(item)),
     };
     const registry: RepositoryRegistry = { schemaVersion: 1, repositories: [] };
     await mkdir(config.rootDir, { recursive: true });
+    await mkdir(config.workspaceRoot, { recursive: true });
     await writeJsonAtomic(paths.config, config);
     await writeJsonAtomic(paths.registry, registry);
+    await writeJsonAtomic(paths.workspaces, { schemaVersion: 1, workspaces: [] });
     return config;
   }
 
@@ -216,18 +226,22 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
 
   async function updateConfig(input: {
     rootDir?: string;
+    workspaceRoot?: string;
     scanRoots?: string[];
   }): Promise<ManagerConfig> {
     const current = await readConfig(paths.config);
     const updated: ManagerConfig = {
       ...current,
       rootDir: input.rootDir === undefined ? current.rootDir : resolve(input.rootDir),
+      workspaceRoot:
+        input.workspaceRoot === undefined ? current.workspaceRoot : resolve(input.workspaceRoot),
       scanRoots:
         input.scanRoots === undefined
           ? current.scanRoots
           : input.scanRoots.map((path) => resolve(path)),
     };
     await mkdir(updated.rootDir, { recursive: true });
+    await mkdir(updated.workspaceRoot, { recursive: true });
     await writeJsonAtomic(paths.config, updated);
     return updated;
   }
