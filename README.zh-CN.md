@@ -44,6 +44,8 @@ cpl list core --json
 cpl go core
 cpl organize my-local-tool --dry-run
 cpl organize my-local-tool --yes
+cpl organize --all --dry-run
+cpl organize --all --yes
 cpl forget my-local-tool --yes
 cpl doctor
 ```
@@ -53,6 +55,17 @@ macOS 剪贴板并打印出来。剪贴板不可用时只会显示警告，不�
 
 `scan` 默认只预览，只有传入 `--register` 才会登记仓库。`forget` 仅删除索引记录，绝不
 删除仓库文件。
+
+批量迁移时，先登记扫描结果，再统一预演全部目标路径：
+
+```bash
+cpl scan /Users/your-name/Projects --register
+cpl organize --all --dry-run
+cpl organize --all --yes
+```
+
+`organize --all` 会在移动前预检所有已登记仓库。任意仓库存在目标冲突时，不会开始移动；
+执行过程中遇到意外文件系统错误时会停止处理后续仓库。批量模式不会反复覆盖剪贴板。
 
 ## 配置文件
 

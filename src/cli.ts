@@ -21,7 +21,7 @@ import {
   withSpinner,
   type TerminalTheme,
 } from "./terminal.js";
-import type { ManagerConfig, RepositoryManager, RepositoryRecord } from "./types.js";
+import type { ManagerConfig, OrganizePlan, RepositoryManager, RepositoryRecord } from "./types.js";
 
 const helpText = `Compulsive — safely organize local Git repositories
 
@@ -34,13 +34,14 @@ Usage:
   cpl list [query] [--json]
   cpl go <query> [--json]
   cpl organize <query> [--dry-run | --yes] [--json]
+  cpl organize --all [--dry-run | --yes] [--json]
   cpl forget <query> [--yes]
   cpl config [show | file | set-root <path> | add-scan-root <path> | remove-scan-root <path>]
   cpl doctor [--json]
 
 Compulsive never deletes repository files.`;
 
-const booleanFlags = ["json", "register", "dry-run", "yes", "help", "color"];
+const booleanFlags = ["json", "register", "dry-run", "yes", "help", "color", "all"];
 const valueFlags = ["root", "depth", "config"];
 
 interface ParsedArguments {
@@ -171,6 +172,41 @@ async function selectOne(
   const selected = await context.chooseRepository("Choose a repository", matches);
   if (!selected) throw new CompulsiveError("INVALID_INPUT", "Repository selection cancelled.");
   return selected;
+}
+
+interface BatchOrganizeItem {
+  record: RepositoryRecord;
+  plan: OrganizePlan;
+}
+
+async function planAllRepositories(manager: RepositoryManager): Promise<BatchOrganizeItem[]> {
+  const records = await manager.search();
+  const items: BatchOrganizeItem[] = [];
+  const targets = new Map<string, RepositoryRecord>();
+  for (const record of records) {
+    const plan = await manager.planOrganize(record.id);
+    const existing = targets.get(plan.target);
+    if (existing) {
+      throw new CompulsiveError(
+        "CONFLICT",
+        `Repositories ${existing.classificationPath} and ${record.classificationPath} share the same organize target: ${plan.target}`,
+      );
+    }
+    targets.set(plan.target, record);
+    items.push({ record, plan });
+  }
+  return items;
+}
+
+function printBatchPlan(items: BatchOrganizeItem[], context: CliContext): void {
+  for (const { record, plan } of items) {
+    context.stdout(
+      `${record.classificationPath}\n${context.theme.transition(plan.source, plan.target)}`,
+    );
+    for (const warning of plan.warnings) {
+      context.stderr(context.theme.warning(`${record.classificationPath}: ${warning}`));
+    }
+  }
 }
 
 async function outputCd(
@@ -341,6 +377,69 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
       return;
     }
     case "organize": {
+      if (parsed.flags.has("dry-run") && parsed.flags.has("yes")) {
+        throw new CompulsiveError("INVALID_INPUT", "Use either --dry-run or --yes, not both.");
+      }
+      if (parsed.flags.has("all")) {
+        if (parsed.positionals.length > 0) {
+          throw new CompulsiveError(
+            "INVALID_INPUT",
+            "A repository query cannot be combined with --all.",
+          );
+        }
+        const items = await planAllRepositories(context.manager);
+        if (json && parsed.flags.has("dry-run")) {
+          printValue(
+            context,
+            items.map((item) => item.plan),
+            true,
+          );
+          return;
+        }
+        if (!json) printBatchPlan(items, context);
+        if (parsed.flags.has("dry-run")) return;
+        if (!parsed.flags.has("yes")) {
+          if (!allowPrompt) {
+            throw new CompulsiveError(
+              "INVALID_INPUT",
+              "Use --yes to organize all repositories non-interactively.",
+            );
+          }
+          const moveCount = items.filter((item) => !item.plan.isNoop).length;
+          const confirmed = await context.confirm(
+            `Organize ${String(moveCount)} repositories into the managed root?`,
+          );
+          if (!confirmed) {
+            throw new CompulsiveError("INVALID_INPUT", "Organization cancelled.");
+          }
+        }
+        const organizeAll = async () => {
+          const organized: RepositoryRecord[] = [];
+          for (const item of items) {
+            organized.push(
+              item.plan.isNoop ? item.record : await context.manager.organize(item.plan),
+            );
+          }
+          return organized;
+        };
+        const organized = allowPrompt
+          ? await context.runTask("Organizing repositories", organizeAll)
+          : await organizeAll();
+        if (json) printValue(context, organized, true);
+        else {
+          const moveCount = items.filter((item) => !item.plan.isNoop).length;
+          const noopCount = items.length - moveCount;
+          context.stdout(
+            context.theme.success(
+              `Organized ${String(moveCount)} repositories`,
+              noopCount === 0
+                ? undefined
+                : `${String(noopCount)} repositories were already organized.`,
+            ),
+          );
+        }
+        return;
+      }
       const query = requireValue(parsed.positionals.join(" "), "Repository query");
       const record = await selectOne(context.manager, query, context, allowPrompt);
       const plan = await context.manager.planOrganize(record.id);

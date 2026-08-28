@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -107,6 +107,109 @@ describe("cpl CLI", () => {
 
     await expect(manager.search()).resolves.toEqual([]);
     await expect(access(join(rootDir, "local", "move-me", ".git"))).resolves.toBeUndefined();
+  });
+
+  it("previews and organizes all registered repositories without replacing the clipboard", async () => {
+    const sourceRoot = join(sandbox, "external");
+    const repositoryPaths = [join(sourceRoot, "alpha"), join(sourceRoot, "beta")];
+    for (const repositoryPath of repositoryPaths) {
+      await execFileAsync("git", ["init", "-q", repositoryPath]);
+    }
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    for (const repositoryPath of repositoryPaths) {
+      await manager.register({ path: repositoryPath });
+    }
+    const output: string[] = [];
+    const copied: string[] = [];
+    const context = {
+      manager,
+      stdout: (value: string) => output.push(value),
+      stderr: () => undefined,
+      copyText: async (value: string) => {
+        copied.push(value);
+      },
+      isTTY: false,
+    };
+
+    expect(await runCli(["organize", "--all", "--dry-run", "--json"], context)).toBe(0);
+    expect(JSON.parse(output.join("\n"))).toHaveLength(2);
+    for (const repositoryPath of repositoryPaths) {
+      await expect(access(repositoryPath)).resolves.toBeUndefined();
+    }
+
+    output.length = 0;
+    expect(await runCli(["organize", "--all", "--yes", "--json"], context)).toBe(0);
+    expect(JSON.parse(output.join("\n"))).toHaveLength(2);
+    await expect(access(join(rootDir, "local", "alpha", ".git"))).resolves.toBeUndefined();
+    await expect(access(join(rootDir, "local", "beta", ".git"))).resolves.toBeUndefined();
+    expect(copied).toEqual([]);
+  });
+
+  it("preflights every repository before an organize-all move", async () => {
+    const goodRepository = join(sandbox, "external", "good");
+    const conflictingRepository = join(sandbox, "external", "conflict");
+    await execFileAsync("git", ["init", "-q", goodRepository]);
+    await execFileAsync("git", ["init", "-q", conflictingRepository]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    await manager.register({ path: goodRepository });
+    await manager.register({ path: conflictingRepository });
+    await mkdir(join(rootDir, "local", "conflict"), { recursive: true });
+
+    const exitCode = await runCli(["organize", "--all", "--yes"], {
+      manager,
+      stdout: () => undefined,
+      stderr: () => undefined,
+      copyText: async () => undefined,
+      isTTY: false,
+    });
+
+    expect(exitCode).toBe(4);
+    await expect(access(goodRepository)).resolves.toBeUndefined();
+    await expect(access(conflictingRepository)).resolves.toBeUndefined();
+    await expect(access(join(rootDir, "local", "good"))).rejects.toThrow();
+  });
+
+  it("confirms an interactive organize-all operation only once", async () => {
+    const repositoryPath = join(sandbox, "external", "interactive");
+    await execFileAsync("git", ["init", "-q", repositoryPath]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    await manager.register({ path: repositoryPath });
+    let confirmationCount = 0;
+
+    const exitCode = await runCli(["organize", "--all"], {
+      manager,
+      stdout: () => undefined,
+      stderr: () => undefined,
+      copyText: async () => undefined,
+      confirm: async () => {
+        confirmationCount += 1;
+        return true;
+      },
+      runTask: async (_message, task) => task(),
+      isTTY: true,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(confirmationCount).toBe(1);
+    await expect(access(join(rootDir, "local", "interactive", ".git"))).resolves.toBeUndefined();
+  });
+
+  it("rejects combining organize --all with a repository query", async () => {
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+
+    await expect(
+      runCli(["organize", "repo", "--all", "--dry-run"], {
+        manager,
+        stdout: () => undefined,
+        stderr: () => undefined,
+        copyText: async () => undefined,
+        isTTY: false,
+      }),
+    ).resolves.toBe(2);
   });
 
   it("maps ambiguous non-interactive selection to exit code 4", async () => {
