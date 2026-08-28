@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdtemp, realpath, rm } from "node:fs/promises";
+import { access, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -161,5 +161,60 @@ describe("cpl CLI", () => {
         expect.objectContaining({ name: "clipboard", ok: true }),
       ]),
     );
+  });
+
+  it("accepts modern global flags while rejecting unknown options", async () => {
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    const output: string[] = [];
+    const errors: string[] = [];
+    const context = {
+      manager,
+      stdout: (value: string) => output.push(value),
+      stderr: (value: string) => errors.push(value),
+      copyText: async () => undefined,
+      isTTY: false,
+    };
+
+    expect(await runCli(["--no-color", "init", "--root", rootDir], context)).toBe(0);
+    expect(output.at(-1)).toContain("Initialized");
+    expect(await runCli(["list", "--unknown"], context)).toBe(2);
+    expect(errors.at(-1)).toContain("Unknown flag");
+    expect(await runCli(["init", "--root"], context)).toBe(2);
+    expect(errors.at(-1)).toContain("requires a value");
+  });
+
+  it("uses an explicit TypeScript config for first initialization", async () => {
+    const configPath = join(sandbox, "compulsive.config.ts");
+    const configuredRoot = join(sandbox, "configured-source");
+    const configuredScanRoot = join(sandbox, "projects");
+    await writeFile(
+      configPath,
+      `export default {
+        rootDir: ${JSON.stringify(configuredRoot)},
+        scanRoots: [${JSON.stringify(configuredScanRoot)}],
+        ui: { color: "never", unicode: false },
+      }`,
+    );
+    const previousHome = process.env.CPL_HOME;
+    process.env.CPL_HOME = dataDir;
+    const output: string[] = [];
+
+    try {
+      expect(
+        await runCli(["--config", configPath, "init", "--json"], {
+          stdout: (value) => output.push(value),
+          stderr: () => undefined,
+          isTTY: false,
+        }),
+      ).toBe(0);
+    } finally {
+      if (previousHome === undefined) delete process.env.CPL_HOME;
+      else process.env.CPL_HOME = previousHome;
+    }
+
+    expect(JSON.parse(output.join("\n"))).toMatchObject({
+      rootDir: configuredRoot,
+      scanRoots: [configuredScanRoot],
+    });
   });
 });

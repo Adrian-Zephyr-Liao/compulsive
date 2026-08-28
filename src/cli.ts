@@ -1,18 +1,32 @@
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { resolve } from "node:path";
-import { createInterface } from "node:readline/promises";
+
+import mri from "mri";
 
 import { copyTextToClipboard } from "./clipboard.js";
 import { CompulsiveError, type CompulsiveErrorCode } from "./errors.js";
+import {
+  loadCompulsiveConfig,
+  type CompulsiveFileConfig,
+  type LoadedCompulsiveConfig,
+} from "./file-config.js";
 import { runGit } from "./git.js";
 import { createRepositoryManager } from "./manager.js";
 import { formatCdCommand } from "./shell.js";
+import {
+  confirmAction,
+  createTerminalTheme,
+  selectRepository,
+  withSpinner,
+  type TerminalTheme,
+} from "./terminal.js";
 import type { ManagerConfig, RepositoryManager, RepositoryRecord } from "./types.js";
 
 const helpText = `Compulsive — safely organize local Git repositories
 
 Usage:
+  cpl [--config <path>] [--color | --no-color] <command>
   cpl init [--root <path>]
   cpl clone <git-url> [--depth <number>]
   cpl add <path>
@@ -21,13 +35,13 @@ Usage:
   cpl go <query> [--json]
   cpl organize <query> [--dry-run | --yes] [--json]
   cpl forget <query> [--yes]
-  cpl config [show | set-root <path> | add-scan-root <path> | remove-scan-root <path>]
+  cpl config [show | file | set-root <path> | add-scan-root <path> | remove-scan-root <path>]
   cpl doctor [--json]
 
 Compulsive never deletes repository files.`;
 
-const booleanFlags = new Set(["json", "register", "dry-run", "yes", "help"]);
-const valueFlags = new Set(["root", "depth"]);
+const booleanFlags = ["json", "register", "dry-run", "yes", "help", "color"];
+const valueFlags = ["root", "depth", "config"];
 
 interface ParsedArguments {
   command: string;
@@ -41,65 +55,73 @@ export interface CliContext {
   stdout(value: string): void;
   stderr(value: string): void;
   copyText(value: string): Promise<void>;
-  prompt(question: string): Promise<string>;
   isTTY: boolean;
+  fileConfig: CompulsiveFileConfig;
+  configPath?: string;
+  theme: TerminalTheme;
+  chooseRepository(
+    message: string,
+    repositories: RepositoryRecord[],
+  ): Promise<RepositoryRecord | undefined>;
+  confirm(message: string): Promise<boolean | undefined>;
+  runTask<T>(message: string, task: () => Promise<T>): Promise<T>;
 }
 
-function defaultPrompt(question: string): Promise<string> {
-  const interface_ = createInterface({ input: process.stdin, output: process.stderr });
-  return interface_.question(question).finally(() => interface_.close());
-}
-
-function createDefaultContext(): CliContext {
+function createDefaultContext(loaded: LoadedCompulsiveConfig = { config: {} }): CliContext {
+  const isTTY = Boolean(process.stdin.isTTY && process.stderr.isTTY);
   return {
-    manager: createRepositoryManager(),
+    manager: createRepositoryManager(
+      loaded.config.rootDir === undefined ? {} : { defaultRootDir: loaded.config.rootDir },
+    ),
     stdout: (value) => process.stdout.write(`${value}\n`),
     stderr: (value) => process.stderr.write(`${value}\n`),
     copyText: copyTextToClipboard,
-    prompt: defaultPrompt,
-    isTTY: Boolean(process.stdin.isTTY && process.stderr.isTTY),
+    isTTY,
+    fileConfig: loaded.config,
+    ...(loaded.path === undefined ? {} : { configPath: loaded.path }),
+    theme: createTerminalTheme({
+      color: loaded.config.ui?.color ?? "auto",
+      unicode: loaded.config.ui?.unicode ?? true,
+      isTTY,
+    }),
+    chooseRepository: selectRepository,
+    confirm: confirmAction,
+    runTask: withSpinner,
   };
 }
 
 function parseArguments(argv: string[]): ParsedArguments {
-  const [command = "help", ...arguments_] = argv;
-  const parsed: ParsedArguments = {
-    command,
-    positionals: [],
-    flags: new Set(),
-    values: new Map(),
-  };
-  let positionalOnly = false;
-  for (let index = 0; index < arguments_.length; index += 1) {
-    const argument = arguments_[index]!;
-    if (argument === "--") {
-      positionalOnly = true;
-      continue;
+  const separatorIndex = argv.indexOf("--");
+  const options = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
+  const trailingPositionals = separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1);
+  let unknownFlag: string | undefined;
+  const result = mri(options, {
+    alias: {
+      ...Object.fromEntries([...booleanFlags, ...valueFlags].map((name) => [name, []])),
+      h: "help",
+    },
+    boolean: booleanFlags,
+    string: valueFlags,
+    unknown(flag) {
+      unknownFlag = flag;
+    },
+  });
+  if (unknownFlag) throw new CompulsiveError("INVALID_INPUT", `Unknown flag: ${unknownFlag}`);
+
+  const positionals = [...result._, ...trailingPositionals];
+  const command = result.help ? "help" : (positionals.shift() ?? "help");
+  const flags = new Set(booleanFlags.filter((name) => result[name] === true && name !== "color"));
+  if (result.color === true) flags.add("color");
+  if (result.color === false) flags.add("no-color");
+  const values = new Map<string, string>();
+  for (const name of valueFlags) {
+    const value: unknown = result[name];
+    if (value === "") {
+      throw new CompulsiveError("INVALID_INPUT", `Flag --${name} requires a value.`);
     }
-    if (!positionalOnly && argument.startsWith("--")) {
-      const [rawName, inlineValue] = argument.slice(2).split("=", 2);
-      const name = rawName!;
-      if (booleanFlags.has(name)) {
-        if (inlineValue !== undefined) {
-          throw new CompulsiveError("INVALID_INPUT", `Flag --${name} does not accept a value.`);
-        }
-        parsed.flags.add(name);
-        continue;
-      }
-      if (valueFlags.has(name)) {
-        const value = inlineValue ?? arguments_[index + 1];
-        if (!value || (inlineValue === undefined && value.startsWith("--"))) {
-          throw new CompulsiveError("INVALID_INPUT", `Flag --${name} requires a value.`);
-        }
-        parsed.values.set(name, value);
-        if (inlineValue === undefined) index += 1;
-        continue;
-      }
-      throw new CompulsiveError("INVALID_INPUT", `Unknown flag: --${name}`);
-    }
-    parsed.positionals.push(argument);
+    if (typeof value === "string") values.set(name, value);
   }
-  return parsed;
+  return { command, positionals, flags, values };
 }
 
 function requireValue(value: string | undefined, label: string): string {
@@ -125,8 +147,8 @@ function printValue(context: CliContext, value: unknown, json: boolean): void {
   context.stdout(json ? JSON.stringify(value) : String(value));
 }
 
-function describeRecord(record: RepositoryRecord): string {
-  return `${record.classificationPath}\t${record.absolutePath}`;
+function describeRecord(record: RepositoryRecord, context: CliContext): string {
+  return context.theme.repository(record.classificationPath, record.absolutePath);
 }
 
 async function selectOne(
@@ -146,12 +168,8 @@ async function selectOne(
       `Multiple repositories match "${query}": ${matches.map((item) => item.name).join(", ")}`,
     );
   }
-  matches.forEach((record, index) =>
-    context.stderr(`${String(index + 1)}. ${describeRecord(record)}`),
-  );
-  const answer = Number.parseInt(await context.prompt("Choose a repository number: "), 10);
-  const selected = matches[answer - 1];
-  if (!selected) throw new CompulsiveError("INVALID_INPUT", "Invalid repository selection.");
+  const selected = await context.chooseRepository("Choose a repository", matches);
+  if (!selected) throw new CompulsiveError("INVALID_INPUT", "Repository selection cancelled.");
   return selected;
 }
 
@@ -166,7 +184,7 @@ async function outputCd(
     await context.copyText(command);
   } catch {
     copied = false;
-    context.stderr("Warning: unable to copy the cd command; it is printed below.");
+    context.stderr(context.theme.warning("Unable to copy the cd command; it is printed below."));
   }
   if (json) printValue(context, { repository: record, cdCommand: command, copied }, true);
   else context.stdout(command);
@@ -179,7 +197,16 @@ async function handleConfig(
 ): Promise<void> {
   const [action = "show", value] = parsed.positionals;
   let config: ManagerConfig;
-  if (action === "show") {
+  if (action === "file") {
+    printValue(
+      context,
+      json
+        ? { path: context.configPath ?? null, config: context.fileConfig }
+        : (context.configPath ?? "No compulsive.config file is active."),
+      json,
+    );
+    return;
+  } else if (action === "show") {
     config = await context.manager.getConfig();
   } else if (action === "set-root") {
     config = await context.manager.updateConfig({ rootDir: requireValue(value, "Root path") });
@@ -224,7 +251,7 @@ async function handleDoctor(context: CliContext, json: boolean): Promise<void> {
   if (json) printValue(context, checks, true);
   else
     checks.forEach((check) =>
-      context.stdout(`${check.ok ? "PASS" : "FAIL"}\t${check.name}\t${check.detail}`),
+      context.stdout(context.theme.check(check.ok, check.name, check.detail)),
     );
   if (checks.some((check) => !check.ok)) {
     throw new CompulsiveError("FILESYSTEM_FAILED", "One or more doctor checks failed.", checks);
@@ -242,18 +269,28 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
       return;
     }
     case "init": {
-      const rootDir = parsed.values.get("root");
-      const config = await context.manager.initialize(rootDir === undefined ? {} : { rootDir });
-      printValue(context, json ? config : `Initialized ${config.rootDir}`, json);
+      const rootDir = parsed.values.get("root") ?? context.fileConfig.rootDir;
+      const scanRoots = context.fileConfig.scanRoots;
+      const config = await context.manager.initialize({
+        ...(rootDir === undefined ? {} : { rootDir }),
+        ...(scanRoots === undefined ? {} : { scanRoots }),
+      });
+      printValue(
+        context,
+        json ? config : context.theme.success("Initialized", config.rootDir),
+        json,
+      );
       return;
     }
     case "clone": {
       const remote = requireValue(parsed.positionals[0], "Git remote");
       const depthValue = parsed.values.get("depth");
-      const record = await context.manager.clone({
-        remote,
-        ...(depthValue === undefined ? {} : { depth: Number(depthValue) }),
-      });
+      const task = () =>
+        context.manager.clone({
+          remote,
+          ...(depthValue === undefined ? {} : { depth: Number(depthValue) }),
+        });
+      const record = allowPrompt ? await context.runTask("Cloning repository", task) : await task();
       await outputCd(record, context, json);
       return;
     }
@@ -261,13 +298,17 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
       const record = await context.manager.register({
         path: requireValue(parsed.positionals[0], "Repository path"),
       });
-      printValue(context, json ? record : describeRecord(record), json);
+      printValue(context, json ? record : describeRecord(record, context), json);
       return;
     }
     case "scan": {
-      const result = await context.manager.discover(
-        parsed.positionals.length > 0 ? { paths: parsed.positionals } : {},
-      );
+      const task = () =>
+        context.manager.discover(
+          parsed.positionals.length > 0 ? { paths: parsed.positionals } : {},
+        );
+      const result = allowPrompt
+        ? await context.runTask("Scanning repositories", task)
+        : await task();
       let output: Array<RepositoryRecord | (typeof result.repositories)[number]> =
         result.repositories;
       if (parsed.flags.has("register")) {
@@ -282,8 +323,8 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
         output.forEach((item) =>
           context.stdout(
             "id" in item
-              ? describeRecord(item)
-              : `${item.classificationPath}\t${item.absolutePath}`,
+              ? describeRecord(item, context)
+              : context.theme.repository(item.classificationPath, item.absolutePath),
           ),
         );
       return;
@@ -291,7 +332,7 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
     case "list": {
       const records = await context.manager.search({ query: parsed.positionals.join(" ") });
       if (json) printValue(context, records, true);
-      else records.forEach((record) => context.stdout(describeRecord(record)));
+      else records.forEach((record) => context.stdout(describeRecord(record, context)));
       return;
     }
     case "go": {
@@ -304,22 +345,25 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
       const record = await selectOne(context.manager, query, context, allowPrompt);
       const plan = await context.manager.planOrganize(record.id);
       if (!json) {
-        plan.warnings.forEach((warning) => context.stderr(`Warning: ${warning}`));
+        plan.warnings.forEach((warning) => context.stderr(context.theme.warning(warning)));
       }
       if (parsed.flags.has("dry-run")) {
-        printValue(context, json ? plan : `${plan.source} -> ${plan.target}`, json);
+        printValue(context, json ? plan : context.theme.transition(plan.source, plan.target), json);
         return;
       }
       if (!parsed.flags.has("yes")) {
         if (!allowPrompt) {
           throw new CompulsiveError("INVALID_INPUT", "Use --yes to organize non-interactively.");
         }
-        const answer = await context.prompt(`Move ${plan.source} to ${plan.target}? [y/N] `);
-        if (!/^y(?:es)?$/i.test(answer.trim())) {
+        const confirmed = await context.confirm(`Move ${plan.source} to ${plan.target}?`);
+        if (!confirmed) {
           throw new CompulsiveError("INVALID_INPUT", "Organization cancelled.");
         }
       }
-      const organized = await context.manager.organize(plan);
+      const organizeTask = () => context.manager.organize(plan);
+      const organized = allowPrompt
+        ? await context.runTask("Organizing repository", organizeTask)
+        : await organizeTask();
       await outputCd(organized, context, json);
       return;
     }
@@ -330,13 +374,15 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
         if (!allowPrompt) {
           throw new CompulsiveError("INVALID_INPUT", "Use --yes to forget non-interactively.");
         }
-        const answer = await context.prompt(`Forget ${record.name} without deleting files? [y/N] `);
-        if (!/^y(?:es)?$/i.test(answer.trim())) {
+        const confirmed = await context.confirm(`Forget ${record.name} without deleting files?`);
+        if (!confirmed) {
           throw new CompulsiveError("INVALID_INPUT", "Forget cancelled.");
         }
       }
       await context.manager.forget(record.id);
-      context.stdout(`Forgot ${record.name}; files were not deleted.`);
+      context.stdout(
+        context.theme.success(`Forgot ${record.name}`, "Repository files were not deleted."),
+      );
       return;
     }
     case "config": {
@@ -353,10 +399,25 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
 }
 
 export async function runCli(argv: string[], overrides: Partial<CliContext> = {}): Promise<number> {
-  const context = { ...createDefaultContext(), ...overrides };
+  let context = { ...createDefaultContext(), ...overrides };
   const json = argv.includes("--json");
   try {
-    await dispatch(parseArguments(argv), context);
+    const parsed = parseArguments(argv);
+    const configPath = parsed.values.get("config");
+    const loaded = await loadCompulsiveConfig(configPath === undefined ? {} : { configPath });
+    context = { ...createDefaultContext(loaded), ...overrides };
+    if (!("theme" in overrides)) {
+      context.theme = createTerminalTheme({
+        color: parsed.flags.has("no-color")
+          ? "never"
+          : parsed.flags.has("color")
+            ? "always"
+            : (context.fileConfig.ui?.color ?? "auto"),
+        unicode: context.fileConfig.ui?.unicode ?? true,
+        isTTY: context.isTTY,
+      });
+    }
+    await dispatch(parsed, context);
     return 0;
   } catch (error) {
     const failure =
@@ -369,7 +430,7 @@ export async function runCli(argv: string[], overrides: Partial<CliContext> = {}
     context.stderr(
       json
         ? JSON.stringify({ error: { code: failure.code, message: failure.message } })
-        : `${failure.code}: ${failure.message}`,
+        : context.theme.error(failure.code, failure.message),
     );
     return exitCodeFor(failure);
   }

@@ -50,14 +50,63 @@ cpl doctor
 
 ### Configuration
 
+Compulsive supports an unbuild-style project configuration. Create `compulsive.config.ts` in the
+directory where you run `cpl`:
+
+```ts
+export default {
+  rootDir: "~/Desktop/源码",
+  scanRoots: ["~/Documents/Projects"],
+  ui: {
+    color: "auto", // auto | always | never
+    unicode: true,
+  },
+};
+```
+
+TypeScript, JavaScript, JSON, and JSONC configuration files are loaded by `c12`. If Compulsive is
+also installed as a project dependency, use the typed helper for editor completion:
+
+```ts
+import { defineConfig } from "@adrian-zephyr/compulsive";
+
+export default defineConfig({
+  rootDir: "~/Desktop/源码",
+  scanRoots: ["~/Documents/Projects"],
+  ui: { color: "auto", unicode: true },
+});
+```
+
+Use an explicit file from any directory with `cpl --config <path> <command>`. `cpl config file`
+prints the active file. The file supplies defaults for first initialization and terminal styling; it
+does not silently rewrite an already initialized repository index. `--root`, `--color`, and
+`--no-color` take precedence where applicable.
+
+Only use trusted TypeScript or JavaScript configuration files because Node.js executes them. Prefer
+`compulsive.config.jsonc` when an executable configuration is unnecessary.
+
+Persistent settings can still be managed directly:
+
 ```bash
 cpl config show
+cpl config file
 cpl config set-root ~/Desktop/源码
 cpl config add-scan-root ~/Projects
 cpl config remove-scan-root ~/Projects
 ```
 
 State is stored in `~/Library/Application Support/compulsive` on macOS. Set `CPL_HOME` to override the application-data directory, which is useful for isolated automation and tests.
+
+### Terminal experience
+
+Human-readable output uses compact repository cards, status symbols, color-aware diagnostics,
+interactive selection, confirmation prompts, and spinners. Colors automatically disable outside a
+TTY and respect `NO_COLOR`; use `--color` or `--no-color` to override them. `--json` remains plain,
+single-value structured output without prompts, spinners, or ANSI codes.
+
+The CLI keeps its runtime small by using focused packages: `mri` for argument parsing,
+`picocolors` for ANSI styling, `@clack/prompts` for interaction, and `c12` for modern configuration
+loading.
 
 ### Structured output and exit codes
 
