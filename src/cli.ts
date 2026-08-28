@@ -6,11 +6,6 @@ import mri from "mri";
 
 import { copyTextToClipboard } from "./clipboard.js";
 import { CompulsiveError, type CompulsiveErrorCode } from "./errors.js";
-import {
-  loadCompulsiveConfig,
-  type CompulsiveFileConfig,
-  type LoadedCompulsiveConfig,
-} from "./file-config.js";
 import { runGit } from "./git.js";
 import { createRepositoryManager } from "./manager.js";
 import { formatCdCommand } from "./shell.js";
@@ -36,7 +31,7 @@ const helpText = `Compulsive — safely organize local Git repositories
 
 Usage:
   cpl
-  cpl [--config <path>] [--color | --no-color] <command>
+  cpl [--color | --no-color] <command>
   cpl init [--root <path>]
   cpl clone <git-url> [--depth <number>]
   cpl add <path>
@@ -55,7 +50,7 @@ Usage:
   cpl workspace|ws remove <workspace-query> <repository-query> [--yes] [--json]
   cpl workspace|ws sync [workspace-query] [--json]
   cpl workspace|ws delete <workspace-query> [--yes] [--json]
-  cpl config [show | file | set-root <path> | set-workspace-root <path> | add-scan-root <path> | remove-scan-root <path>]
+  cpl config [show | set-root <path> | set-workspace-root <path> | add-scan-root <path> | remove-scan-root <path>]
   cpl doctor [--json]
 
 Compulsive never deletes repository files.`;
@@ -71,7 +66,7 @@ const booleanFlags = [
   "worktree",
   "create-branch",
 ];
-const valueFlags = ["root", "depth", "config", "path", "alias", "branch", "workspace"];
+const valueFlags = ["root", "depth", "path", "alias", "branch", "workspace"];
 
 interface ParsedArguments {
   command: string;
@@ -88,8 +83,6 @@ export interface CliContext {
   stderr(value: string): void;
   copyText(value: string): Promise<void>;
   isTTY: boolean;
-  fileConfig: CompulsiveFileConfig;
-  configPath?: string;
   theme: TerminalTheme;
   chooseRepository(
     message: string,
@@ -107,21 +100,17 @@ export interface CliContext {
   runTask<T>(message: string, task: () => Promise<T>): Promise<T>;
 }
 
-function createDefaultContext(loaded: LoadedCompulsiveConfig = { config: {} }): CliContext {
+function createDefaultContext(): CliContext {
   const isTTY = Boolean(process.stdin.isTTY && process.stderr.isTTY);
   return {
-    manager: createRepositoryManager(
-      loaded.config.rootDir === undefined ? {} : { defaultRootDir: loaded.config.rootDir },
-    ),
+    manager: createRepositoryManager(),
     stdout: (value) => process.stdout.write(`${value}\n`),
     stderr: (value) => process.stderr.write(`${value}\n`),
     copyText: copyTextToClipboard,
     isTTY,
-    fileConfig: loaded.config,
-    ...(loaded.path === undefined ? {} : { configPath: loaded.path }),
     theme: createTerminalTheme({
-      color: loaded.config.ui?.color ?? "auto",
-      unicode: loaded.config.ui?.unicode ?? true,
+      color: "auto",
+      unicode: true,
       isTTY,
     }),
     chooseRepository: selectRepository,
@@ -136,19 +125,17 @@ function parseArguments(argv: string[]): ParsedArguments {
   const separatorIndex = argv.indexOf("--");
   const options = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
   const trailingPositionals = separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1);
-  let unknownFlag: string | undefined;
   const result = mri(options, {
     alias: {
       ...Object.fromEntries([...booleanFlags, ...valueFlags].map((name) => [name, []])),
       h: "help",
     },
-    boolean: booleanFlags,
-    string: valueFlags,
+    boolean: [...booleanFlags],
+    string: [...valueFlags],
     unknown(flag) {
-      unknownFlag = flag;
+      throw new CompulsiveError("INVALID_INPUT", `Unknown flag: ${flag}`);
     },
   });
-  if (unknownFlag) throw new CompulsiveError("INVALID_INPUT", `Unknown flag: ${unknownFlag}`);
 
   const positionals = [...result._, ...trailingPositionals];
   const command = result.help ? "help" : (positionals.shift() ?? "");
@@ -441,16 +428,7 @@ async function handleConfig(
 ): Promise<void> {
   const [action = "show", value] = parsed.positionals;
   let config: ManagerConfig;
-  if (action === "file") {
-    printValue(
-      context,
-      json
-        ? { path: context.configPath ?? null, config: context.fileConfig }
-        : (context.configPath ?? "No compulsive.config file is active."),
-      json,
-    );
-    return;
-  } else if (action === "show") {
+  if (action === "show") {
     config = await context.manager.getConfig();
   } else if (action === "set-root") {
     config = await context.manager.updateConfig({ rootDir: requireValue(value, "Root path") });
@@ -745,14 +723,8 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
       return;
     }
     case "init": {
-      const rootDir = parsed.values.get("root") ?? context.fileConfig.rootDir;
-      const workspaceRoot = context.fileConfig.workspaceRoot;
-      const scanRoots = context.fileConfig.scanRoots;
-      const config = await context.manager.initialize({
-        ...(rootDir === undefined ? {} : { rootDir }),
-        ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
-        ...(scanRoots === undefined ? {} : { scanRoots }),
-      });
+      const rootDir = parsed.values.get("root");
+      const config = await context.manager.initialize(rootDir === undefined ? {} : { rootDir });
       printValue(
         context,
         json ? config : context.theme.success("Initialized", config.rootDir),
@@ -965,21 +937,18 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
 }
 
 export async function runCli(argv: string[], overrides: Partial<CliContext> = {}): Promise<number> {
-  let context = { ...createDefaultContext(), ...overrides };
+  const context = { ...createDefaultContext(), ...overrides };
   const json = argv.includes("--json");
   try {
     const parsed = parseArguments(argv);
-    const configPath = parsed.values.get("config");
-    const loaded = await loadCompulsiveConfig(configPath === undefined ? {} : { configPath });
-    context = { ...createDefaultContext(loaded), ...overrides };
     if (!("theme" in overrides)) {
       context.theme = createTerminalTheme({
         color: parsed.flags.has("no-color")
           ? "never"
           : parsed.flags.has("color")
             ? "always"
-            : (context.fileConfig.ui?.color ?? "auto"),
-        unicode: context.fileConfig.ui?.unicode ?? true,
+            : "auto",
+        unicode: true,
         isTTY: context.isTTY,
       });
     }

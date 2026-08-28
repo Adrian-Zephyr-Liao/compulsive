@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -299,41 +299,26 @@ describe("cpl CLI", () => {
     expect(errors.at(-1)).toContain("requires a value");
   });
 
-  it("uses an explicit TypeScript config for first initialization", async () => {
-    const configPath = join(sandbox, "compulsive.config.ts");
-    const configuredRoot = join(sandbox, "configured-source");
-    const configuredWorkspaceRoot = join(sandbox, "configured-workspaces");
-    const configuredScanRoot = join(sandbox, "projects");
-    await writeFile(
-      configPath,
-      `export default {
-        rootDir: ${JSON.stringify(configuredRoot)},
-        workspaceRoot: ${JSON.stringify(configuredWorkspaceRoot)},
-        scanRoots: [${JSON.stringify(configuredScanRoot)}],
-        ui: { color: "never", unicode: false },
-      }`,
-    );
-    const previousHome = process.env.CPL_HOME;
-    process.env.CPL_HOME = dataDir;
+  it("rejects removed project config entry points", async () => {
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
     const output: string[] = [];
+    const errors: string[] = [];
+    const context = {
+      manager,
+      stdout: (value: string) => output.push(value),
+      stderr: (value: string) => errors.push(value),
+      isTTY: false,
+    };
 
-    try {
-      expect(
-        await runCli(["--config", configPath, "init", "--json"], {
-          stdout: (value) => output.push(value),
-          stderr: () => undefined,
-          isTTY: false,
-        }),
-      ).toBe(0);
-    } finally {
-      if (previousHome === undefined) delete process.env.CPL_HOME;
-      else process.env.CPL_HOME = previousHome;
-    }
+    expect(await runCli(["--config", "compulsive.config.ts", "init"], context)).toBe(2);
+    expect(errors.at(-1)).toContain("Unknown flag: --config");
 
-    expect(JSON.parse(output.join("\n"))).toMatchObject({
-      rootDir: configuredRoot,
-      workspaceRoot: configuredWorkspaceRoot,
-      scanRoots: [configuredScanRoot],
-    });
+    expect(await runCli(["init", "--root", rootDir], context)).toBe(0);
+    expect(await runCli(["config", "file"], context)).toBe(2);
+    expect(errors.at(-1)).toContain("Unknown config action: file");
+
+    output.length = 0;
+    expect(await runCli(["config", "show", "--json"], context)).toBe(0);
+    expect(JSON.parse(output.join("\n"))).toMatchObject({ rootDir });
   });
 });

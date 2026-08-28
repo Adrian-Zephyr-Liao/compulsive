@@ -1,8 +1,9 @@
 import { autocomplete, confirm, isCancel, spinner, type SpinnerOptions } from "@clack/prompts";
 import pc from "picocolors";
 
-import type { TerminalColorMode } from "./file-config.js";
 import type { RepositoryRecord, WorkspaceRecord } from "./types.js";
+
+export type TerminalColorMode = "auto" | "always" | "never";
 
 export type NavigationTarget =
   | { kind: "repository"; repository: RepositoryRecord; aliases?: string[] }

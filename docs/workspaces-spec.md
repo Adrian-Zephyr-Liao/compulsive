@@ -28,7 +28,7 @@ output and exit codes.
    creating a branch requires an explicit `--create-branch` flag.
 4. The default workspace root is a `Workspaces` sibling of the configured repository root. For
    example, `/Users/your-name/Code` produces `/Users/your-name/Workspaces`.
-5. `workspaceRoot` can be set during initialization, in `compulsive.config.*`, or through
+5. `workspaceRoot` can be set during library initialization or through
    `cpl config set-workspace-root`.
 6. Workspace deletion removes only Compulsive-managed links and clean Git worktrees. It never
    deletes a registered canonical repository or unrelated user files.
@@ -70,20 +70,11 @@ member aliases are also searchable through the interactive combined picker.
 
 ## Configuration Contract
 
-Project configuration accepts an additive field:
-
-```ts
-import { defineConfig } from "@adrian-zephyr/compulsive";
-
-export default defineConfig({
-  rootDir: "/Users/your-name/Code",
-  workspaceRoot: "/Users/your-name/Workspaces",
-});
-```
-
-Persistent manager configuration gains `workspaceRoot`. Existing schema-version-1 configuration
-without this field is accepted and derives the sibling default. The next configuration write stores
-the derived absolute path; existing `rootDir` and `scanRoots` remain unchanged.
+Persistent manager configuration includes `workspaceRoot` and is managed through
+`cpl config set-workspace-root <path>`. Existing schema-version-1 configuration without this field
+is accepted and derives the sibling default. The next configuration write stores the derived
+absolute path; existing `rootDir` and `scanRoots` remain unchanged. No project-level configuration
+file is loaded.
 
 ## Data Model
 
@@ -237,7 +228,7 @@ src/workspaces.ts        Workspace lifecycle and filesystem/Git safety logic
 src/manager.ts           RepositoryManager integration and organize synchronization
 src/cli.ts               workspace/ws commands and query resolution
 src/terminal.ts          Combined repository/workspace interactive selectors
-src/file-config.ts       workspaceRoot configuration
+src/storage.ts           manager and workspace configuration persistence
 tests/workspaces.test.ts Unit/integration lifecycle tests
 tests/workspace-cli.test.ts CLI and interactive contract tests
 docs/workspaces-spec.md  Living feature specification

@@ -123,57 +123,22 @@ cpl workspace delete Product --yes
 绝不删除 canonical 仓库。脏 worktree、意外文件、目录或被替换的链接都会阻止操作；
 Workspace 中无关的用户文件会原样保留。`workspace` 可以缩写为 `ws`。
 
-## 配置文件
+## 配置
 
-Compulsive 支持类似 unbuild 的项目配置。在运行 `cpl` 的目录中创建
-`compulsive.config.ts`：
-
-```ts
-export default {
-  rootDir: "/Users/your-name/Code",
-  workspaceRoot: "/Users/your-name/Workspaces",
-  scanRoots: ["/Users/your-name/Projects"],
-  ui: {
-    color: "auto", // auto | always | never
-    unicode: true,
-  },
-};
-```
-
-配置由 `c12` 加载，支持 TypeScript、JavaScript、JSON 和 JSONC。如果项目中也安装了
-Compulsive，可以使用带类型提示的辅助函数：
-
-```ts
-import { defineConfig } from "@adrian-zephyr/compulsive";
-
-export default defineConfig({
-  rootDir: "/Users/your-name/Code",
-  workspaceRoot: "/Users/your-name/Workspaces",
-  scanRoots: ["/Users/your-name/Projects"],
-  ui: { color: "auto", unicode: true },
-});
-```
-
-通过 `cpl --config <path> <command>` 可以指定任意配置文件，`cpl config file` 用于查看
-当前生效的文件。配置文件为首次初始化和终端主题提供默认值，不会静默覆盖已经初始化的
-仓库索引。适用时，`--root`、`--color` 和 `--no-color` 的优先级更高。
-
-TypeScript 和 JavaScript 配置会被 Node.js 执行，因此只能使用可信配置。如果不需要执行
-代码，建议使用 `compulsive.config.jsonc`。
-
-持久化设置也可以通过命令直接管理：
+Compulsive 只维护一份本地持久化配置，通过 CLI 管理：
 
 ```bash
 cpl config show
-cpl config file
 cpl config set-root /Users/your-name/Code
 cpl config set-workspace-root /Users/your-name/Workspaces
 cpl config add-scan-root /Users/your-name/Projects
 cpl config remove-scan-root /Users/your-name/Projects
 ```
 
-在 macOS 上，状态保存在 `/Users/your-name/Library/Application Support/compulsive`。
-自动化和隔离测试可以通过 `CPL_HOME` 修改应用数据目录。
+在 macOS 上，配置以 `config.json` 保存在
+`/Users/your-name/Library/Application Support/compulsive`。自动化和隔离测试可以通过
+`CPL_HOME` 修改应用数据目录。Compulsive 不再加载项目级 TypeScript、JavaScript、JSONC
+或 `compulsive.config.*` 文件。
 
 ## 终端体验
 
@@ -183,7 +148,7 @@ cpl config remove-scan-root /Users/your-name/Projects
 控制字符。
 
 CLI 使用职责单一的轻量工具：`mri` 负责参数解析，`picocolors` 负责 ANSI 样式，
-`@clack/prompts` 负责交互，`c12` 负责现代配置加载。
+`@clack/prompts` 负责交互。
 
 ## 结构化输出与退出码
 

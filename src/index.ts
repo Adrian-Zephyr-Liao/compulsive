@@ -1,12 +1,5 @@
 export { CompulsiveError } from "./errors.js";
 export type { CompulsiveErrorCode } from "./errors.js";
-export { defineConfig, loadCompulsiveConfig } from "./file-config.js";
-export type {
-  CompulsiveFileConfig,
-  LoadedCompulsiveConfig,
-  LoadCompulsiveConfigOptions,
-  TerminalColorMode,
-} from "./file-config.js";
 export { parseGitRemote } from "./git-url.js";
 export { createRepositoryManager } from "./manager.js";
 export { formatCdCommand, quoteZsh } from "./shell.js";
