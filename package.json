@@ -20,7 +20,7 @@
     "url": "git+https://github.com/Adrian-Zephyr-Liao/compulsive.git"
   },
   "bin": {
-    "cpl": "./dist/bin.mjs"
+    "cpl": "dist/bin.mjs"
   },
   "files": [
     "dist",
