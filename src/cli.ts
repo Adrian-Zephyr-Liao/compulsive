@@ -26,12 +26,14 @@ import type { ManagerConfig, OrganizePlan, RepositoryManager, RepositoryRecord }
 const helpText = `Compulsive — safely organize local Git repositories
 
 Usage:
+  cpl
   cpl [--config <path>] [--color | --no-color] <command>
   cpl init [--root <path>]
   cpl clone <git-url> [--depth <number>]
   cpl add <path>
   cpl scan [paths...] [--register]
   cpl list [query] [--json]
+  cpl search <query> [--json]
   cpl go <query> [--json]
   cpl organize <query> [--dry-run | --yes] [--json]
   cpl organize --all [--dry-run | --yes] [--json]
@@ -110,7 +112,7 @@ function parseArguments(argv: string[]): ParsedArguments {
   if (unknownFlag) throw new CompulsiveError("INVALID_INPUT", `Unknown flag: ${unknownFlag}`);
 
   const positionals = [...result._, ...trailingPositionals];
-  const command = result.help ? "help" : (positionals.shift() ?? "help");
+  const command = result.help ? "help" : (positionals.shift() ?? "");
   const flags = new Set(booleanFlags.filter((name) => result[name] === true && name !== "color"));
   if (result.color === true) flags.add("color");
   if (result.color === false) flags.add("no-color");
@@ -226,6 +228,16 @@ async function outputCd(
   else context.stdout(command);
 }
 
+async function openRepositoryPicker(context: CliContext): Promise<void> {
+  const records = await context.manager.search();
+  if (records.length === 0) {
+    context.stdout("No repositories are registered.");
+    return;
+  }
+  const selected = await context.chooseRepository("Search repositories", records);
+  if (selected) await outputCd(selected, context, false);
+}
+
 async function handleConfig(
   parsed: ParsedArguments,
   context: CliContext,
@@ -298,6 +310,11 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
   const json = parsed.flags.has("json");
   const allowPrompt = context.isTTY && !json;
   switch (parsed.command) {
+    case "": {
+      if (allowPrompt) await openRepositoryPicker(context);
+      else context.stdout(helpText);
+      return;
+    }
     case "help":
     case "--help":
     case "-h": {
@@ -368,6 +385,19 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
     case "list": {
       const records = await context.manager.search({ query: parsed.positionals.join(" ") });
       if (json) printValue(context, records, true);
+      else records.forEach((record) => context.stdout(describeRecord(record, context)));
+      return;
+    }
+    case "search": {
+      const query = parsed.positionals.join(" ").trim();
+      if (!query && allowPrompt) {
+        await openRepositoryPicker(context);
+        return;
+      }
+      requireValue(query, "Repository query");
+      const records = await context.manager.search({ query });
+      if (json) printValue(context, records, true);
+      else if (records.length === 0) context.stdout(`No repositories match: ${query}`);
       else records.forEach((record) => context.stdout(describeRecord(record, context)));
       return;
     }

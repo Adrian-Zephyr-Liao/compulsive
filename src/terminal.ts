@@ -1,4 +1,4 @@
-import { confirm, isCancel, select, spinner, type SpinnerOptions } from "@clack/prompts";
+import { autocomplete, confirm, isCancel, spinner, type SpinnerOptions } from "@clack/prompts";
 import pc from "picocolors";
 
 import type { TerminalColorMode } from "./file-config.js";
@@ -57,8 +57,10 @@ export async function selectRepository(
   message: string,
   repositories: RepositoryRecord[],
 ): Promise<RepositoryRecord | undefined> {
-  const result = await select({
+  const result = await autocomplete({
     message,
+    placeholder: "Type to filter repositories...",
+    maxItems: 10,
     options: repositories.map((repository) => ({
       value: repository,
       label: repository.classificationPath,

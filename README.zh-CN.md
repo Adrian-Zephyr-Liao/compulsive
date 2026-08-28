@@ -41,6 +41,8 @@ cpl scan /Users/your-name/Projects
 cpl scan /Users/your-name/Projects --register
 cpl list
 cpl list core --json
+cpl search core
+cpl search core --json
 cpl go core
 cpl organize my-local-tool --dry-run
 cpl organize my-local-tool --yes
@@ -55,6 +57,9 @@ macOS 剪贴板并打印出来。剪贴板不可用时只会显示警告，不�
 
 `scan` 默认只预览，只有传入 `--register` 才会登记仓库。`forget` 仅删除索引记录，绝不
 删除仓库文件。
+
+在交互终端中直接运行 `cpl` 或 `cpl search`，会打开支持键入过滤的仓库选择器；选中仓库
+后会复制并打印安全的 `cd` 命令。脚本和管道环境不会显示交互提示。
 
 批量迁移时，先登记扫描结果，再统一预演全部目标路径：
 
