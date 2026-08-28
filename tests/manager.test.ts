@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -152,5 +152,91 @@ describe("RepositoryManager state", () => {
     expect(record.remoteUrl).toBe("github.com/acme/private");
     expect(persisted).not.toContain("secret-user");
     expect(persisted).not.toContain("secret-token");
+  });
+
+  it("discovers repositories without registering them or descending into heavy folders", async () => {
+    const scanRoot = join(sandbox, "scan-root");
+    const outerRepository = join(scanRoot, "outer");
+    const ignoredRepository = join(scanRoot, "node_modules", "ignored");
+    await execFileAsync("git", ["init", "-q", outerRepository]);
+    await execFileAsync("git", ["init", "-q", join(outerRepository, "nested")]);
+    await execFileAsync("git", ["init", "-q", ignoredRepository]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+
+    const result = await manager.discover({ paths: [scanRoot] });
+
+    expect(result.repositories).toHaveLength(1);
+    expect(result.repositories[0]).toMatchObject({
+      absolutePath: await realpath(outerRepository),
+      classificationPath: "local/outer",
+      isRegistered: false,
+    });
+    await expect(manager.search()).resolves.toEqual([]);
+  });
+
+  it("discovers a Git worktree whose .git marker is a file", async () => {
+    const mainRepository = join(sandbox, "main-repository");
+    const worktreePath = join(sandbox, "linked-worktree");
+    await execFileAsync("git", ["init", "-q", mainRepository]);
+    await execFileAsync("git", ["-C", mainRepository, "config", "user.name", "Compulsive Test"]);
+    await execFileAsync("git", ["-C", mainRepository, "config", "user.email", "test@example.com"]);
+    await writeFile(join(mainRepository, "README.md"), "test\n");
+    await execFileAsync("git", ["-C", mainRepository, "add", "README.md"]);
+    await execFileAsync("git", ["-C", mainRepository, "commit", "-q", "-m", "initial"]);
+    await execFileAsync("git", ["-C", mainRepository, "worktree", "add", "-q", worktreePath]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+
+    const result = await manager.discover({ paths: [worktreePath] });
+
+    expect(result.repositories).toHaveLength(1);
+    expect(result.repositories[0]?.absolutePath).toBe(await realpath(worktreePath));
+  });
+
+  it("forgets only the index record and leaves repository files untouched", async () => {
+    const repositoryPath = join(sandbox, "keep-me");
+    await execFileAsync("git", ["init", "-q", repositoryPath]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const record = await manager.register({ path: repositoryPath });
+
+    await manager.forget(record.id);
+
+    await expect(manager.search()).resolves.toEqual([]);
+    await expect(access(join(repositoryPath, ".git"))).resolves.toBeUndefined();
+  });
+
+  it("previews and safely organizes a local repository into the managed root", async () => {
+    const repositoryPath = join(sandbox, "散落项目", "local-app");
+    await execFileAsync("git", ["init", "-q", repositoryPath]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const record = await manager.register({ path: repositoryPath });
+
+    const plan = await manager.planOrganize(record.id);
+    expect(plan).toMatchObject({
+      source: await realpath(repositoryPath),
+      target: join(await realpath(rootDir), "local", "local-app"),
+      isNoop: false,
+    });
+    await expect(access(repositoryPath)).resolves.toBeUndefined();
+
+    const organized = await manager.organize(plan);
+
+    expect(organized.absolutePath).toBe(await realpath(join(rootDir, "local", "local-app")));
+    expect(organized.isManaged).toBe(true);
+    await expect(access(repositoryPath)).rejects.toThrow();
+  });
+
+  it("refuses to plan an organization when the target is occupied", async () => {
+    const repositoryPath = join(sandbox, "external", "conflict");
+    await execFileAsync("git", ["init", "-q", repositoryPath]);
+    await mkdir(join(rootDir, "local", "conflict"), { recursive: true });
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const record = await manager.register({ path: repositoryPath });
+
+    await expect(manager.planOrganize(record.id)).rejects.toMatchObject({ code: "CONFLICT" });
   });
 });

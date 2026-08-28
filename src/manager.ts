@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, realpath } from "node:fs/promises";
+import { mkdir, realpath, rename, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
+import { discoverRepositoryRoots } from "./discovery.js";
 import { CompulsiveError } from "./errors.js";
 import { findRepositoryRoot, readOrigin, runGit } from "./git.js";
 import { parseGitRemote } from "./git-url.js";
@@ -15,6 +16,8 @@ import {
 } from "./storage.js";
 import type {
   ManagerConfig,
+  DiscoveryResult,
+  OrganizePlan,
   RepositoryManager,
   RepositoryManagerOptions,
   RepositoryRecord,
@@ -158,5 +161,165 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
     return register({ path: target });
   }
 
-  return { initialize, clone, register, search };
+  async function discover(input: { paths?: string[] } = {}): Promise<DiscoveryResult> {
+    const config = await readConfig(paths.config);
+    const registry = await readRegistry(paths.registry);
+    const scanPaths = input.paths ?? config.scanRoots;
+    if (scanPaths.length === 0) {
+      throw new CompulsiveError(
+        "INVALID_INPUT",
+        "Provide scan paths or configure at least one scan root.",
+      );
+    }
+
+    const repositoryRoots = await discoverRepositoryRoots(scanPaths.map((path) => resolve(path)));
+    const repositories = await Promise.all(
+      repositoryRoots.map(async (repositoryRoot) => {
+        const remoteUrl = await readOrigin(repositoryRoot);
+        const classification = remoteUrl ? parseGitRemote(remoteUrl) : undefined;
+        const name = classification?.name ?? basename(repositoryRoot);
+        const classificationPath = classification?.relativePath ?? `local/${name}`;
+        const isRegistered = registry.repositories.some(
+          (record) =>
+            record.absolutePath === repositoryRoot ||
+            (classification && record.canonicalRemote === classification.canonicalRemote),
+        );
+        return {
+          absolutePath: repositoryRoot,
+          kind: classification ? ("remote" as const) : ("local" as const),
+          name,
+          classificationPath,
+          ...(classification ? { canonicalRemote: classification.canonicalRemote } : {}),
+          isRegistered,
+        };
+      }),
+    );
+    return { repositories };
+  }
+
+  async function forget(id: RepositoryRecord["id"]): Promise<void> {
+    await readConfig(paths.config);
+    const registry = await readRegistry(paths.registry);
+    const index = registry.repositories.findIndex((record) => record.id === id);
+    if (index === -1) {
+      throw new CompulsiveError("NOT_FOUND", "Repository is not registered.");
+    }
+    registry.repositories.splice(index, 1);
+    await writeJsonAtomic(paths.registry, registry);
+  }
+
+  async function findExistingAncestor(path: string): Promise<string> {
+    let candidate = path;
+    while (!(await fileExists(candidate))) {
+      const parent = dirname(candidate);
+      if (parent === candidate) {
+        throw new CompulsiveError("FILESYSTEM_FAILED", `No existing ancestor for ${path}.`);
+      }
+      candidate = parent;
+    }
+    return candidate;
+  }
+
+  async function planOrganize(id: RepositoryRecord["id"]): Promise<OrganizePlan> {
+    const config = await readConfig(paths.config);
+    const registry = await readRegistry(paths.registry);
+    const record = registry.repositories.find((item) => item.id === id);
+    if (!record) {
+      throw new CompulsiveError("NOT_FOUND", "Repository is not registered.");
+    }
+    if (!(await fileExists(record.absolutePath))) {
+      throw new CompulsiveError(
+        "NOT_FOUND",
+        `Repository path no longer exists: ${record.absolutePath}`,
+      );
+    }
+
+    const source = await realpath(record.absolutePath);
+    const managedRoot = await realpath(config.rootDir);
+    const target = join(managedRoot, ...record.classificationPath.split("/"));
+    const isNoop = source === target;
+    if (!isNoop && (pathIsInside(source, target) || pathIsInside(target, source))) {
+      throw new CompulsiveError("CONFLICT", "Source and target repositories cannot be nested.");
+    }
+    if (!isNoop && (await fileExists(target))) {
+      throw new CompulsiveError("CONFLICT", `Organize target already exists: ${target}`);
+    }
+
+    const targetAncestor = await findExistingAncestor(dirname(target));
+    if ((await stat(source)).dev !== (await stat(targetAncestor)).dev) {
+      throw new CompulsiveError("CONFLICT", "Cross-volume repository moves are not supported.");
+    }
+
+    const status = await runGit(["status", "--porcelain"], { cwd: source, allowFailure: true });
+    return {
+      repositoryId: record.id,
+      source,
+      target,
+      isNoop,
+      warnings: status.stdout ? ["Repository has uncommitted changes; moving preserves them."] : [],
+    };
+  }
+
+  async function organize(plan: OrganizePlan): Promise<RepositoryRecord> {
+    const currentPlan = await planOrganize(plan.repositoryId);
+    if (currentPlan.source !== plan.source || currentPlan.target !== plan.target) {
+      throw new CompulsiveError("CONFLICT", "Organization plan is stale; create a new preview.");
+    }
+    const registry = await readRegistry(paths.registry);
+    const recordIndex = registry.repositories.findIndex(
+      (record) => record.id === plan.repositoryId,
+    );
+    if (recordIndex === -1) {
+      throw new CompulsiveError("NOT_FOUND", "Repository is not registered.");
+    }
+    if (currentPlan.isNoop) return registry.repositories[recordIndex]!;
+
+    await mkdir(dirname(currentPlan.target), { recursive: true });
+    try {
+      await rename(currentPlan.source, currentPlan.target);
+    } catch (error) {
+      throw new CompulsiveError("FILESYSTEM_FAILED", "Unable to move repository.", {
+        cause: error,
+      });
+    }
+
+    try {
+      const verifiedRoot = await realpath(await findRepositoryRoot(currentPlan.target));
+      if (verifiedRoot !== (await realpath(currentPlan.target))) {
+        throw new CompulsiveError("GIT_FAILED", "Moved path is not the expected repository root.");
+      }
+    } catch (error) {
+      try {
+        await rename(currentPlan.target, currentPlan.source);
+      } catch {
+        throw new CompulsiveError(
+          "FILESYSTEM_FAILED",
+          "Repository verification failed and the move could not be rolled back.",
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+
+    const updated: RepositoryRecord = {
+      ...registry.repositories[recordIndex]!,
+      absolutePath: await realpath(currentPlan.target),
+      isManaged: true,
+      lastSeenAt: new Date().toISOString(),
+    };
+    registry.repositories[recordIndex] = updated;
+    await writeJsonAtomic(paths.registry, registry);
+    return updated;
+  }
+
+  return {
+    initialize,
+    clone,
+    discover,
+    register,
+    search,
+    planOrganize,
+    organize,
+    forget,
+  };
 }

@@ -50,6 +50,31 @@ export interface CloneRepositoryInput {
   depth?: number;
 }
 
+export interface DiscoverRepositoriesInput {
+  paths?: string[];
+}
+
+export interface DiscoveredRepository {
+  absolutePath: string;
+  kind: RepositoryKind;
+  name: string;
+  classificationPath: string;
+  canonicalRemote?: string;
+  isRegistered: boolean;
+}
+
+export interface DiscoveryResult {
+  repositories: DiscoveredRepository[];
+}
+
+export interface OrganizePlan {
+  repositoryId: RepositoryId;
+  source: string;
+  target: string;
+  isNoop: boolean;
+  warnings: string[];
+}
+
 export interface SearchRepositoriesInput {
   query?: string;
 }
@@ -62,6 +87,10 @@ export interface RepositoryManagerOptions {
 export interface RepositoryManager {
   initialize(input?: InitializeInput): Promise<ManagerConfig>;
   clone(input: CloneRepositoryInput): Promise<RepositoryRecord>;
+  discover(input?: DiscoverRepositoriesInput): Promise<DiscoveryResult>;
   register(input: RegisterRepositoryInput): Promise<RepositoryRecord>;
   search(input?: SearchRepositoriesInput): Promise<RepositoryRecord[]>;
+  planOrganize(id: RepositoryId): Promise<OrganizePlan>;
+  organize(plan: OrganizePlan): Promise<RepositoryRecord>;
+  forget(id: RepositoryId): Promise<void>;
 }
