@@ -126,6 +126,30 @@ export interface SearchWorkspacesInput {
   query?: string;
 }
 
+export type AddWorkspaceMemberInput = {
+  workspaceId: WorkspaceId;
+  repositoryId: RepositoryId;
+  alias?: string;
+} & ({ mode?: "link" } | { mode: "worktree"; branch: string; createBranch?: boolean });
+
+export interface RemoveWorkspaceMemberInput {
+  workspaceId: WorkspaceId;
+  repositoryId: RepositoryId;
+}
+
+export interface WorkspaceSyncIssue {
+  repositoryId: RepositoryId;
+  alias: string;
+  code: "MISSING_REPOSITORY" | "CONFLICT";
+  message: string;
+}
+
+export interface WorkspaceSyncResult {
+  workspace: WorkspaceRecord;
+  repaired: RepositoryId[];
+  issues: WorkspaceSyncIssue[];
+}
+
 export interface RepositoryManagerOptions {
   dataDir?: string;
   defaultRootDir?: string;
@@ -144,4 +168,8 @@ export interface RepositoryManager {
   forget(id: RepositoryId): Promise<void>;
   createWorkspace(input: CreateWorkspaceInput): Promise<WorkspaceRecord>;
   searchWorkspaces(input?: SearchWorkspacesInput): Promise<WorkspaceRecord[]>;
+  addWorkspaceMember(input: AddWorkspaceMemberInput): Promise<WorkspaceRecord>;
+  removeWorkspaceMember(input: RemoveWorkspaceMemberInput): Promise<WorkspaceRecord>;
+  syncWorkspace(id: WorkspaceId): Promise<WorkspaceSyncResult>;
+  deleteWorkspace(id: WorkspaceId): Promise<void>;
 }

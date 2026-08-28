@@ -11,6 +11,7 @@ export { parseGitRemote } from "./git-url.js";
 export { createRepositoryManager } from "./manager.js";
 export { formatCdCommand, quoteZsh } from "./shell.js";
 export type {
+  AddWorkspaceMemberInput,
   CloneRepositoryInput,
   CreateWorkspaceInput,
   DiscoveredRepository,
@@ -20,6 +21,7 @@ export type {
   ManagerConfig,
   OrganizePlan,
   RegisterRepositoryInput,
+  RemoveWorkspaceMemberInput,
   RepositoryClassification,
   RepositoryId,
   RepositoryKind,
@@ -34,4 +36,6 @@ export type {
   WorkspaceMemberMode,
   WorkspaceRecord,
   WorkspaceRegistry,
+  WorkspaceSyncIssue,
+  WorkspaceSyncResult,
 } from "./types.js";
