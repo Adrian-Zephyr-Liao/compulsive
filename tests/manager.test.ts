@@ -229,6 +229,42 @@ describe("RepositoryManager state", () => {
     await expect(access(repositoryPath)).rejects.toThrow();
   });
 
+  it("removes empty source directories after the last repository is organized", async () => {
+    const legacyRoot = join(sandbox, "legacy-source");
+    const firstRepository = join(legacyRoot, "team", "first-app");
+    const secondRepository = join(legacyRoot, "team", "second-app");
+    await execFileAsync("git", ["init", "-q", firstRepository]);
+    await execFileAsync("git", ["init", "-q", secondRepository]);
+    await writeFile(join(legacyRoot, ".DS_Store"), "Finder metadata");
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const firstRecord = await manager.register({ path: firstRepository });
+    const secondRecord = await manager.register({ path: secondRepository });
+
+    await manager.organize(await manager.planOrganize(firstRecord.id));
+    await expect(access(legacyRoot)).resolves.toBeUndefined();
+
+    await manager.organize(await manager.planOrganize(secondRecord.id));
+
+    await expect(access(legacyRoot)).rejects.toThrow();
+  });
+
+  it("stops source cleanup when an ancestor contains user files", async () => {
+    const legacyRoot = join(sandbox, "legacy-with-notes");
+    const repositoryPath = join(legacyRoot, "team", "keep-notes-safe");
+    const notesPath = join(legacyRoot, "notes.txt");
+    await execFileAsync("git", ["init", "-q", repositoryPath]);
+    await writeFile(notesPath, "do not delete\n");
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const record = await manager.register({ path: repositoryPath });
+
+    await manager.organize(await manager.planOrganize(record.id));
+
+    await expect(access(join(legacyRoot, "team"))).rejects.toThrow();
+    await expect(readFile(notesPath, "utf8")).resolves.toBe("do not delete\n");
+  });
+
   it("refuses to plan an organization when the target is occupied", async () => {
     const repositoryPath = join(sandbox, "external", "conflict");
     await execFileAsync("git", ["init", "-q", repositoryPath]);

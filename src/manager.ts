@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, realpath, rename, stat } from "node:fs/promises";
-import { homedir } from "node:os";
+import { mkdir, readdir, realpath, rename, rmdir, stat, unlink } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { discoverRepositoryRoots } from "./discovery.js";
@@ -31,6 +31,98 @@ function defaultDataDir(): string {
 function pathIsInside(parent: string, child: string): boolean {
   const difference = relative(parent, child);
   return difference === "" || (!difference.startsWith("..") && !isAbsolute(difference));
+}
+
+async function canonicalPath(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+async function cleanupBoundary(source: string, config: ManagerConfig): Promise<string> {
+  const configuredPaths = await Promise.all(
+    [config.rootDir, ...config.scanRoots].map((path) => canonicalPath(path)),
+  );
+  const configuredBoundary = configuredPaths
+    .filter((path) => path !== source && pathIsInside(path, source))
+    .sort((left, right) => right.length - left.length)[0];
+  if (configuredBoundary) return configuredBoundary;
+
+  const home = await canonicalPath(homedir());
+  if (source !== home && pathIsInside(home, source)) {
+    const topLevelDirectory = relative(home, source).split(/[\\/]/, 1)[0];
+    if (topLevelDirectory) return join(home, topLevelDirectory);
+  }
+
+  const temporaryRoot = await canonicalPath(tmpdir());
+  if (source !== temporaryRoot && pathIsInside(temporaryRoot, source)) return temporaryRoot;
+  return dirname(source);
+}
+
+function hasErrorCode(error: unknown, ...codes: string[]): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    codes.includes(error.code)
+  );
+}
+
+async function removeEmptySourceDirectories(source: string, config: ManagerConfig): Promise<void> {
+  const boundary = await cleanupBoundary(source, config);
+  let candidate = dirname(source);
+
+  while (candidate !== boundary && pathIsInside(boundary, candidate)) {
+    let entries: string[];
+    try {
+      entries = await readdir(candidate);
+    } catch (error) {
+      if (hasErrorCode(error, "ENOENT")) {
+        candidate = dirname(candidate);
+        continue;
+      }
+      throw new CompulsiveError(
+        "FILESYSTEM_FAILED",
+        `Repository moved, but the source directory could not be inspected: ${candidate}`,
+        { cause: error },
+      );
+    }
+
+    if (entries.length === 1 && entries[0] === ".DS_Store") {
+      try {
+        await unlink(join(candidate, ".DS_Store"));
+      } catch (error) {
+        if (!hasErrorCode(error, "ENOENT")) {
+          throw new CompulsiveError(
+            "FILESYSTEM_FAILED",
+            `Repository moved, but Finder metadata could not be removed: ${candidate}`,
+            { cause: error },
+          );
+        }
+      }
+    } else if (entries.length > 0) {
+      return;
+    }
+
+    try {
+      await rmdir(candidate);
+    } catch (error) {
+      if (hasErrorCode(error, "ENOENT")) {
+        candidate = dirname(candidate);
+        continue;
+      }
+      if (hasErrorCode(error, "ENOTEMPTY")) return;
+      throw new CompulsiveError(
+        "FILESYSTEM_FAILED",
+        `Repository moved, but the empty source directory could not be removed: ${candidate}`,
+        { cause: error },
+      );
+    }
+    candidate = dirname(candidate);
+  }
 }
 
 function matchRank(record: RepositoryRecord, query: string): number {
@@ -347,6 +439,8 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
       }
       throw error;
     }
+    const config = await readConfig(paths.config);
+    await removeEmptySourceDirectories(currentPlan.source, config);
     return updated;
   }
 
