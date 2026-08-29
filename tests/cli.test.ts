@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -129,6 +129,40 @@ describe("cpl CLI", () => {
     expect(output.join("\n")).toContain("cpl  scan");
     expect(output.join("\n")).toContain("local/found-repo");
     expect(output.join("\n")).toContain("1 repository found · preview only");
+  });
+
+  it("uses classification paths when the managed root resolves through a symlink", async () => {
+    const actualRoot = join(sandbox, "actual-root");
+    const linkedRoot = join(sandbox, "linked-root");
+    await mkdir(actualRoot, { recursive: true });
+    await symlink(actualRoot, linkedRoot, "dir");
+    const repositoryPath = join(linkedRoot, "local", "promoted");
+    await execFileAsync("git", ["init", "-q", repositoryPath]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: linkedRoot });
+    await manager.initialize();
+    await manager.register({ path: repositoryPath });
+    await execFileAsync("git", [
+      "-C",
+      repositoryPath,
+      "remote",
+      "add",
+      "origin",
+      "git@github.com:acme/promoted.git",
+    ]);
+    const output: string[] = [];
+
+    expect(
+      await runCli(["organize", "--all", "--dry-run", "--no-color"], {
+        manager,
+        stdout: (value) => output.push(value),
+        stderr: () => undefined,
+        copyText: async () => undefined,
+        isTTY: false,
+      }),
+    ).toBe(0);
+
+    expect(output.join("\n")).toContain("github.com/acme/promoted");
+    expect(output.join("\n")).not.toContain(await realpath(actualRoot));
   });
 
   it("previews organize, applies only with --yes, and forgets without deleting", async () => {

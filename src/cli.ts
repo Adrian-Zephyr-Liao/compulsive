@@ -985,7 +985,12 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
         }
         if (!json) {
           const config = await context.manager.getConfig();
-          printBatchPlan(items, context, config.rootDir, parsed.flags.has("dry-run"));
+          printBatchPlan(
+            items,
+            context,
+            await realpath(config.rootDir),
+            parsed.flags.has("dry-run"),
+          );
         }
         if (parsed.flags.has("dry-run")) return;
         if (items.length === 0) {
@@ -1033,6 +1038,7 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
         if (json) printValue(context, plan, true);
         else {
           const config = await context.manager.getConfig();
+          const rootDir = await realpath(config.rootDir);
           context.stdout(
             [
               context.theme.header("organize plan"),
@@ -1040,7 +1046,7 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
               context.theme.move(
                 record.name,
                 record.classificationPath,
-                targetClassification(plan.target, config.rootDir),
+                targetClassification(plan.target, rootDir),
               ),
               "",
               context.theme.summary([plan.isNoop ? "0 moves" : "1 move", "no files changed"]),
