@@ -109,6 +109,28 @@ describe("cpl CLI", () => {
     expect(JSON.parse(output.join("\n"))).toEqual([]);
   });
 
+  it("presents scan results with a heading and summary", async () => {
+    const scanRoot = join(sandbox, "scan");
+    await execFileAsync("git", ["init", "-q", join(scanRoot, "found-repo")]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const output: string[] = [];
+
+    expect(
+      await runCli(["scan", scanRoot, "--no-color"], {
+        manager,
+        stdout: (value) => output.push(value),
+        stderr: () => undefined,
+        copyText: async () => undefined,
+        isTTY: false,
+      }),
+    ).toBe(0);
+
+    expect(output.join("\n")).toContain("cpl  scan");
+    expect(output.join("\n")).toContain("local/found-repo");
+    expect(output.join("\n")).toContain("1 repository found · preview only");
+  });
+
   it("previews organize, applies only with --yes, and forgets without deleting", async () => {
     const repositoryPath = join(sandbox, "external", "move-me");
     await execFileAsync("git", ["init", "-q", repositoryPath]);
@@ -211,6 +233,15 @@ describe("cpl CLI", () => {
     await expect(manager.search({ query: "promoted" })).resolves.toEqual([promotedRecord]);
 
     output.length = 0;
+    expect(await runCli(["organize", "--all", "--dry-run", "--no-color"], context)).toBe(0);
+    expect(output.join("\n")).toContain("cpl  organize plan");
+    expect(output.join("\n")).toContain("MOVE  promoted");
+    expect(output.join("\n")).toContain("local/promoted");
+    expect(output.join("\n")).toContain("github.com/acme/promoted");
+    expect(output.join("\n")).toContain("1 move · no files changed");
+    expect(output.join("\n")).not.toContain("local/stable");
+
+    output.length = 0;
     expect(await runCli(["organize", "--all", "--yes", "--json"], context)).toBe(0);
     expect(JSON.parse(output.join("\n"))).toEqual([
       expect.objectContaining({
@@ -274,6 +305,36 @@ describe("cpl CLI", () => {
     expect(exitCode).toBe(0);
     expect(confirmationCount).toBe(1);
     await expect(access(join(rootDir, "local", "interactive", ".git"))).resolves.toBeUndefined();
+  });
+
+  it("does not confirm or run a task when every repository is already organized", async () => {
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const output: string[] = [];
+    let confirmationCount = 0;
+    let taskCount = 0;
+
+    const exitCode = await runCli(["organize", "--all", "--no-color"], {
+      manager,
+      stdout: (value) => output.push(value),
+      stderr: () => undefined,
+      copyText: async () => undefined,
+      confirm: async () => {
+        confirmationCount += 1;
+        return true;
+      },
+      runTask: async (_message, task) => {
+        taskCount += 1;
+        return task();
+      },
+      isTTY: true,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(confirmationCount).toBe(0);
+    expect(taskCount).toBe(0);
+    expect(output.join("\n")).toContain("No repositories need organizing.");
+    expect(output.join("\n")).toContain("0 moves");
   });
 
   it("rejects combining organize --all with a repository query", async () => {
@@ -356,6 +417,13 @@ describe("cpl CLI", () => {
         expect.objectContaining({ name: "clipboard", ok: true }),
       ]),
     );
+
+    output.length = 0;
+    expect(await runCli(["doctor", "--no-color"], context)).toBe(0);
+    expect(output.join("\n")).toContain("cpl  doctor");
+    expect(output.join("\n")).toContain("Git");
+    expect(output.join("\n")).toContain("Managed root");
+    expect(output.join("\n")).toContain("checks passed");
   });
 
   it("accepts modern global flags while rejecting unknown options", async () => {

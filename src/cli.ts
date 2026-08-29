@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import { access, lstat, realpath } from "node:fs/promises";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import mri from "mri";
 
@@ -27,31 +27,47 @@ import type {
   WorkspaceRecord,
 } from "./types.js";
 
-const helpText = `Compulsive — safely organize local Git repositories
+const helpText = `Compulsive
+Safely organize and navigate local Git repositories.
 
-Usage:
-  cpl
-  cpl [--color | --no-color] <command>
-  cpl init [--root <path>]
+USAGE
+  cpl <command> [options]
+  cpl                         Search repositories and workspaces
+
+REPOSITORIES
+  cpl init [--root <path>]    Initialize the managed repository root
   cpl clone <git-url> [--depth <number>]
-  cpl add <path>
+                              Clone, register, and copy a cd command
+  cpl add <path>              Register an existing repository
   cpl scan [paths...] [--register]
-  cpl list [query] [--json]
+                              Discover or register repositories
+  cpl list [query] [--json]   List registered repositories
   cpl search <query> [--workspace <workspace-query>] [--json]
-  cpl go <query> [--json]
+  cpl go <query> [--json]     Copy and print a safe cd command
   cpl organize <query> [--dry-run | --yes] [--json]
   cpl organize --all [--dry-run | --yes] [--json]
-  cpl forget <query> [--yes]
+  cpl forget <query> [--yes]  Unregister without deleting files
+
+WORKSPACES
   cpl workspace|ws create <name> [--path <path>] [--json]
   cpl workspace|ws list [query] [--json]
   cpl workspace|ws show|go <workspace-query> [--json]
-  cpl workspace|ws add <workspace-query> <repository-query> [--alias <name>] [--json]
-  cpl workspace|ws add <workspace-query> <repository-query> --worktree --branch <branch> [--create-branch] [--alias <name>] [--json]
+  cpl workspace|ws add <workspace-query> <repository-query> [options]
   cpl workspace|ws remove <workspace-query> <repository-query> [--yes] [--json]
   cpl workspace|ws sync [workspace-query] [--json]
   cpl workspace|ws delete <workspace-query> [--yes] [--json]
-  cpl config [show | set-root <path> | set-workspace-root <path> | add-scan-root <path> | remove-scan-root <path>]
+
+SYSTEM
+  cpl config show
+  cpl config set-root|set-workspace-root <path>
+  cpl config add-scan-root|remove-scan-root <path>
   cpl doctor [--json]
+
+GLOBAL OPTIONS
+  --json       Print machine-readable JSON
+  --color      Force colors
+  --no-color   Disable colors
+  -h, --help   Show help
 
 Compulsive never deletes repository files.`;
 
@@ -182,6 +198,53 @@ function describeRecord(record: RepositoryRecord, context: CliContext): string {
 
 function describeWorkspace(workspace: WorkspaceRecord, context: CliContext): string {
   return context.theme.workspace(workspace.name, workspace.absolutePath, workspace.members.length);
+}
+
+function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+  return `${String(count)} ${count === 1 ? singular : plural}`;
+}
+
+function printRepositories(
+  records: RepositoryRecord[],
+  context: CliContext,
+  title: string,
+  emptyMessage: string,
+): void {
+  const body =
+    records.length === 0
+      ? context.theme.empty(emptyMessage)
+      : records.map((record) => describeRecord(record, context)).join("\n\n");
+  context.stdout(
+    [
+      context.theme.header(title),
+      "",
+      body,
+      "",
+      context.theme.summary([countLabel(records.length, "repository found", "repositories found")]),
+    ].join("\n"),
+  );
+}
+
+function printWorkspaces(workspaces: WorkspaceRecord[], context: CliContext, title: string): void {
+  const body =
+    workspaces.length === 0
+      ? context.theme.empty("No workspaces found.")
+      : workspaces.map((workspace) => describeWorkspace(workspace, context)).join("\n\n");
+  context.stdout(
+    [
+      context.theme.header(title),
+      "",
+      body,
+      "",
+      context.theme.summary([countLabel(workspaces.length, "workspace")]),
+    ].join("\n"),
+  );
+}
+
+function targetClassification(target: string, rootDir: string): string {
+  const candidate = relative(rootDir, target);
+  if (candidate === "" || candidate === ".." || candidate.startsWith(`..${sep}`)) return target;
+  return candidate.split(sep).join("/");
 }
 
 async function selectOne(
@@ -325,14 +388,39 @@ async function planAllRepositories(manager: RepositoryManager): Promise<BatchOrg
   return items.filter((item) => !item.plan.isNoop);
 }
 
-function printBatchPlan(items: BatchOrganizeItem[], context: CliContext): void {
-  for (const { record, plan } of items) {
-    context.stdout(
-      `${record.classificationPath}\n${context.theme.transition(plan.source, plan.target)}`,
-    );
-    for (const warning of plan.warnings) {
-      context.stderr(context.theme.warning(`${record.classificationPath}: ${warning}`));
-    }
+function printBatchPlan(
+  items: BatchOrganizeItem[],
+  context: CliContext,
+  rootDir: string,
+  dryRun: boolean,
+): void {
+  const warnings = items.flatMap(({ record, plan }) =>
+    plan.warnings.map((warning) => ({ name: record.name, warning })),
+  );
+  const body =
+    items.length === 0
+      ? context.theme.empty("No repositories need organizing.")
+      : items
+          .map(({ record, plan }) =>
+            context.theme.move(
+              record.name,
+              record.classificationPath,
+              targetClassification(plan.target, rootDir),
+            ),
+          )
+          .join("\n\n");
+  const summary = [
+    countLabel(items.length, "move"),
+    ...(warnings.length > 0 ? [countLabel(warnings.length, "warning")] : []),
+    ...(dryRun ? ["no files changed"] : []),
+  ];
+  context.stdout(
+    [context.theme.header("organize plan"), "", body, "", context.theme.summary(summary)].join(
+      "\n",
+    ),
+  );
+  for (const { name, warning } of warnings) {
+    context.stderr(context.theme.warning(warning, name));
   }
 }
 
@@ -542,10 +630,38 @@ async function handleDoctor(context: CliContext, json: boolean): Promise<void> {
     checks.push({ name: "clipboard", ok: false, detail: String(error) });
   }
   if (json) printValue(context, checks, true);
-  else
-    checks.forEach((check) =>
-      context.stdout(context.theme.check(check.ok, check.name, check.detail)),
+  else {
+    const labels: Record<string, string> = {
+      git: "Git",
+      storage: "Managed root",
+      "workspace-root": "Workspace root",
+      workspaces: "Workspaces",
+      clipboard: "Clipboard",
+    };
+    const passed = checks.filter((check) => check.ok).length;
+    const failed = checks.length - passed;
+    const body = checks
+      .map((check) =>
+        context.theme.check(
+          check.ok,
+          labels[check.name] ?? check.name.replace(/^workspace:/, "Workspace "),
+          check.detail,
+        ),
+      )
+      .join("\n\n");
+    context.stdout(
+      [
+        context.theme.header("doctor"),
+        "",
+        body,
+        "",
+        context.theme.summary([
+          countLabel(passed, "check passed", "checks passed"),
+          ...(failed > 0 ? [countLabel(failed, "check failed", "checks failed")] : []),
+        ]),
+      ].join("\n"),
     );
+  }
   if (checks.some((check) => !check.ok)) {
     throw new CompulsiveError("FILESYSTEM_FAILED", "One or more doctor checks failed.", checks);
   }
@@ -578,7 +694,12 @@ async function handleWorkspace(
   if (action === "list") {
     const workspaces = await context.manager.searchWorkspaces({ query: arguments_.join(" ") });
     if (json) printValue(context, workspaces, true);
-    else workspaces.forEach((workspace) => context.stdout(describeWorkspace(workspace, context)));
+    else
+      printWorkspaces(
+        workspaces,
+        context,
+        arguments_.length > 0 ? `workspaces matching "${arguments_.join(" ")}"` : "workspaces",
+      );
     return;
   }
 
@@ -769,20 +890,47 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
         output = registered;
       }
       if (json) printValue(context, output, true);
-      else
-        output.forEach((item) =>
-          context.stdout(
-            "id" in item
-              ? describeRecord(item, context)
-              : context.theme.repository(item.classificationPath, item.absolutePath),
-          ),
+      else {
+        const body =
+          output.length === 0
+            ? context.theme.empty("No new repositories found.")
+            : output
+                .map((item) =>
+                  "id" in item
+                    ? describeRecord(item, context)
+                    : context.theme.repository(item.classificationPath, item.absolutePath),
+                )
+                .join("\n\n");
+        context.stdout(
+          [
+            context.theme.header("scan"),
+            "",
+            body,
+            "",
+            context.theme.summary([
+              countLabel(
+                output.length,
+                parsed.flags.has("register") ? "repository registered" : "repository found",
+                parsed.flags.has("register") ? "repositories registered" : "repositories found",
+              ),
+              ...(parsed.flags.has("register") ? [] : ["preview only"]),
+            ]),
+          ].join("\n"),
         );
+      }
       return;
     }
     case "list": {
-      const records = await context.manager.search({ query: parsed.positionals.join(" ") });
+      const query = parsed.positionals.join(" ");
+      const records = await context.manager.search({ query });
       if (json) printValue(context, records, true);
-      else records.forEach((record) => context.stdout(describeRecord(record, context)));
+      else
+        printRepositories(
+          records,
+          context,
+          query ? `repositories matching "${query}"` : "repositories",
+          query ? `No repositories match "${query}".` : "No repositories are registered.",
+        );
       return;
     }
     case "search": {
@@ -801,8 +949,13 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
           )
         : await context.manager.search({ query });
       if (json) printValue(context, records, true);
-      else if (records.length === 0) context.stdout(`No repositories match: ${query}`);
-      else records.forEach((record) => context.stdout(describeRecord(record, context)));
+      else
+        printRepositories(
+          records,
+          context,
+          `search "${query}"`,
+          `No repositories match "${query}".`,
+        );
       return;
     }
     case "go": {
@@ -830,8 +983,15 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
           );
           return;
         }
-        if (!json) printBatchPlan(items, context);
+        if (!json) {
+          const config = await context.manager.getConfig();
+          printBatchPlan(items, context, config.rootDir, parsed.flags.has("dry-run"));
+        }
         if (parsed.flags.has("dry-run")) return;
+        if (items.length === 0) {
+          if (json) printValue(context, [], true);
+          return;
+        }
         if (!parsed.flags.has("yes")) {
           if (!allowPrompt) {
             throw new CompulsiveError(
@@ -870,7 +1030,23 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
         plan.warnings.forEach((warning) => context.stderr(context.theme.warning(warning)));
       }
       if (parsed.flags.has("dry-run")) {
-        printValue(context, json ? plan : context.theme.transition(plan.source, plan.target), json);
+        if (json) printValue(context, plan, true);
+        else {
+          const config = await context.manager.getConfig();
+          context.stdout(
+            [
+              context.theme.header("organize plan"),
+              "",
+              context.theme.move(
+                record.name,
+                record.classificationPath,
+                targetClassification(plan.target, config.rootDir),
+              ),
+              "",
+              context.theme.summary([plan.isNoop ? "0 moves" : "1 move", "no files changed"]),
+            ].join("\n"),
+          );
+        }
         return;
       }
       if (!parsed.flags.has("yes")) {

@@ -8,7 +8,14 @@ describe("terminal theme", () => {
 
     expect(theme.success("Initialized", "/tmp/source")).toBe("OK Initialized\n   /tmp/source");
     expect(theme.warning("Clipboard unavailable")).toBe("! Clipboard unavailable");
-    expect(theme.error("INVALID_INPUT", "Bad flag")).toBe("x INVALID_INPUT: Bad flag");
+    expect(theme.error("INVALID_INPUT", "Bad flag")).toBe("x INVALID_INPUT\n\n  Bad flag");
+    expect(theme.header("organize plan")).toBe("cpl  organize plan");
+    expect(theme.move("compulsive", "local/compulsive", "github.com/acme/compulsive")).toBe(
+      "MOVE  compulsive\n      local/compulsive\n   -> github.com/acme/compulsive",
+    );
+    expect(theme.summary(["2 moves", "1 warning", "no files changed"])).toBe(
+      "2 moves · 1 warning · no files changed",
+    );
   });
 
   it("honors forced colors outside a TTY", () => {
@@ -24,5 +31,14 @@ describe("terminal theme", () => {
     expect(
       theme.repository("github.com/vuejs/core", "/Users/me/Desktop/源码/github.com/vuejs/core"),
     ).toBe("◇ github.com/vuejs/core\n  /Users/me/Desktop/源码/github.com/vuejs/core");
+  });
+
+  it("formats warnings with an optional subject", () => {
+    const theme = createTerminalTheme({ color: "never", unicode: true, isTTY: false });
+
+    expect(theme.warning("Repository has uncommitted changes.", "compulsive")).toBe(
+      "▲ compulsive\n  Repository has uncommitted changes.",
+    );
+    expect(theme.empty("No new repositories found.")).toBe("No new repositories found.");
   });
 });

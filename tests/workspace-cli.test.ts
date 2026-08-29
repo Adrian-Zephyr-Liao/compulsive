@@ -66,6 +66,9 @@ describe("cpl workspace", () => {
     expect(await runCli(["workspace", "list", "client", "--json"], context)).toBe(0);
     expect(JSON.parse(output.pop()!)).toHaveLength(1);
 
+    expect(await runCli(["workspace", "list", "client", "--no-color"], context)).toBe(0);
+    expect(output.pop()).toContain('cpl  workspaces matching "client"');
+
     expect(await runCli(["workspace", "go", "Client Apps"], context)).toBe(0);
     expect(copied.at(-1)).toBe(`cd -- '${workspace.absolutePath}'`);
 

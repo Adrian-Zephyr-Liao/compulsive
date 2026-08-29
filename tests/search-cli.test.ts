@@ -108,4 +108,27 @@ describe("cpl search", () => {
     ]);
     expect(output.at(-1)).toBe(copied.at(-1));
   });
+
+  it("presents human-readable search results with a heading and summary", async () => {
+    const repositoryPath = join(sandbox, "checkout");
+    await execFileAsync("git", ["init", "-q", repositoryPath]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    await manager.register({ path: repositoryPath });
+    const output: string[] = [];
+
+    expect(
+      await runCli(["search", "checkout", "--no-color"], {
+        manager,
+        stdout: (value) => output.push(value),
+        stderr: () => undefined,
+        copyText: async () => undefined,
+        isTTY: false,
+      }),
+    ).toBe(0);
+
+    expect(output.join("\n")).toContain('cpl  search "checkout"');
+    expect(output.join("\n")).toContain("local/checkout");
+    expect(output.join("\n")).toContain("1 repository found");
+  });
 });

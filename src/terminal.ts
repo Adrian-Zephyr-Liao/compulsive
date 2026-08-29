@@ -16,13 +16,17 @@ export interface TerminalThemeOptions {
 }
 
 export interface TerminalTheme {
+  header(title: string): string;
   success(title: string, detail?: string): string;
-  warning(message: string): string;
+  warning(message: string, subject?: string): string;
   error(code: string, message: string): string;
+  empty(message: string): string;
   repository(classification: string, path: string): string;
   workspace(name: string, path: string, memberCount: number): string;
   check(ok: boolean, name: string, detail: string): string;
   transition(source: string, target: string): string;
+  move(name: string, source: string, target: string): string;
+  summary(parts: string[]): string;
 }
 
 export function createTerminalTheme(options: TerminalThemeOptions): TerminalTheme {
@@ -35,15 +39,24 @@ export function createTerminalTheme(options: TerminalThemeOptions): TerminalThem
     : { success: "OK", item: "-", warning: "!", error: "x", pass: "OK", fail: "x" };
 
   return {
+    header(title) {
+      return `${colors.dim("cpl")}  ${colors.bold(title)}`;
+    },
     success(title, detail) {
       const heading = `${colors.green(icons.success)} ${colors.bold(title)}`;
       return detail === undefined ? heading : `${heading}\n   ${colors.dim(detail)}`;
     },
-    warning(message) {
-      return `${colors.yellow(icons.warning)} ${colors.yellow(message)}`;
+    warning(message, subject) {
+      if (subject === undefined) {
+        return `${colors.yellow(icons.warning)} ${colors.yellow(message)}`;
+      }
+      return `${colors.yellow(icons.warning)} ${colors.bold(subject)}\n  ${colors.yellow(message)}`;
     },
     error(code, message) {
-      return `${colors.red(icons.error)} ${colors.red(colors.bold(code))}: ${message}`;
+      return `${colors.red(icons.error)} ${colors.red(colors.bold(code))}\n\n  ${message}`;
+    },
+    empty(message) {
+      return colors.dim(message);
     },
     repository(classification, path) {
       return `${colors.cyan(icons.item)} ${colors.bold(classification)}\n  ${colors.dim(path)}`;
@@ -59,6 +72,13 @@ export function createTerminalTheme(options: TerminalThemeOptions): TerminalThem
       const arrow = options.unicode ? "→" : "->";
       return `${colors.dim(source)}\n${colors.cyan(arrow)} ${colors.bold(target)}`;
     },
+    move(name, source, target) {
+      const arrow = options.unicode ? "→" : "->";
+      return `${colors.cyan(colors.bold("MOVE"))}  ${colors.bold(name)}\n      ${colors.dim(source)}\n   ${colors.cyan(arrow)} ${colors.bold(target)}`;
+    },
+    summary(parts) {
+      return parts.map((part) => colors.bold(part)).join(colors.dim(" · "));
+    },
   };
 }
 
@@ -72,7 +92,7 @@ export async function selectRepository(
     maxItems: 10,
     options: repositories.map((repository) => ({
       value: repository,
-      label: repository.classificationPath,
+      label: `Repository  ${repository.classificationPath}`,
       hint: repository.absolutePath,
     })),
     output: process.stderr,
@@ -90,7 +110,7 @@ export async function selectWorkspace(
     maxItems: 10,
     options: workspaces.map((workspace) => ({
       value: workspace,
-      label: workspace.name,
+      label: `Workspace   ${workspace.name}`,
       hint: `${workspace.absolutePath} · ${String(workspace.members.length)} members`,
     })),
     output: process.stderr,
@@ -110,13 +130,13 @@ export async function selectNavigationTarget(
       target.kind === "repository"
         ? {
             value: target,
-            label: [target.repository.classificationPath, ...(target.aliases ?? [])].join(" · "),
-            hint: `repository · ${target.repository.absolutePath}`,
+            label: `Repository  ${[target.repository.classificationPath, ...(target.aliases ?? [])].join(" · ")}`,
+            hint: target.repository.absolutePath,
           }
         : {
             value: target,
-            label: target.workspace.name,
-            hint: `workspace · ${target.workspace.absolutePath}`,
+            label: `Workspace   ${target.workspace.name}`,
+            hint: `${target.workspace.absolutePath} · ${String(target.workspace.members.length)} members`,
           },
     ),
     output: process.stderr,
