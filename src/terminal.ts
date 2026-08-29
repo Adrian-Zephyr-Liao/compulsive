@@ -1,13 +1,63 @@
 import { autocomplete, confirm, isCancel, spinner, type SpinnerOptions } from "@clack/prompts";
+import { relative, sep } from "node:path";
 import pc from "picocolors";
 
-import type { RepositoryRecord, WorkspaceRecord } from "./types.js";
+import type { OrganizePlan, RepositoryRecord, WorkspaceRecord } from "./types.js";
+
+export const helpText = `Compulsive
+Safely organize and navigate local Git repositories.
+
+USAGE
+  cpl <command> [options]
+  cpl                         Search repositories and workspaces
+
+REPOSITORIES
+  cpl init [--root <path>]    Initialize the managed repository root
+  cpl clone <git-url> [--depth <number>]
+                              Clone, register, and copy a cd command
+  cpl add <path>              Register an existing repository
+  cpl scan [paths...] [--register]
+                              Discover or register repositories
+  cpl list [query] [--json]   List registered repositories
+  cpl search <query> [--workspace <workspace-query>] [--json]
+  cpl go <query> [--json]     Copy and print a safe cd command
+  cpl organize <query> [--dry-run | --yes] [--json]
+  cpl organize --all [--dry-run | --yes] [--json]
+  cpl forget <query> [--yes]  Unregister without deleting files
+
+WORKSPACES
+  cpl workspace|ws create <name> [--path <path>] [--json]
+  cpl workspace|ws list [query] [--json]
+  cpl workspace|ws show|go <workspace-query> [--json]
+  cpl workspace|ws add <workspace-query> <repository-query> [options]
+  cpl workspace|ws remove <workspace-query> <repository-query> [--yes] [--json]
+  cpl workspace|ws sync [workspace-query] [--json]
+  cpl workspace|ws delete <workspace-query> [--yes] [--json]
+
+SYSTEM
+  cpl config show
+  cpl config set-root|set-workspace-root <path>
+  cpl config add-scan-root|remove-scan-root <path>
+  cpl doctor [--json]
+
+GLOBAL OPTIONS
+  --json       Print machine-readable JSON
+  --color      Force colors
+  --no-color   Disable colors
+  -h, --help   Show help
+
+Compulsive never deletes repository files.`;
 
 export type TerminalColorMode = "auto" | "always" | "never";
 
 export type NavigationTarget =
   | { kind: "repository"; repository: RepositoryRecord; aliases?: string[] }
   | { kind: "workspace"; workspace: WorkspaceRecord };
+
+export interface OrganizeDisplayItem {
+  record: RepositoryRecord;
+  plan: OrganizePlan;
+}
 
 export interface TerminalThemeOptions {
   color: TerminalColorMode;
@@ -24,7 +74,6 @@ export interface TerminalTheme {
   repository(classification: string, path: string): string;
   workspace(name: string, path: string, memberCount: number): string;
   check(ok: boolean, name: string, detail: string): string;
-  transition(source: string, target: string): string;
   move(name: string, source: string, target: string): string;
   summary(parts: string[]): string;
 }
@@ -68,10 +117,6 @@ export function createTerminalTheme(options: TerminalThemeOptions): TerminalThem
       const icon = ok ? colors.green(icons.pass) : colors.red(icons.fail);
       return `${icon} ${colors.bold(name)}\n  ${colors.dim(detail)}`;
     },
-    transition(source, target) {
-      const arrow = options.unicode ? "→" : "->";
-      return `${colors.dim(source)}\n${colors.cyan(arrow)} ${colors.bold(target)}`;
-    },
     move(name, source, target) {
       const arrow = options.unicode ? "→" : "->";
       return `${colors.cyan(colors.bold("MOVE"))}  ${colors.bold(name)}\n      ${colors.dim(source)}\n   ${colors.cyan(arrow)} ${colors.bold(target)}`;
@@ -79,6 +124,91 @@ export function createTerminalTheme(options: TerminalThemeOptions): TerminalThem
     summary(parts) {
       return parts.map((part) => colors.bold(part)).join(colors.dim(" · "));
     },
+  };
+}
+
+export function formatCount(count: number, singular: string, plural = `${singular}s`): string {
+  return `${String(count)} ${count === 1 ? singular : plural}`;
+}
+
+export function renderRepositoryCollection(
+  theme: TerminalTheme,
+  records: RepositoryRecord[],
+  title: string,
+  emptyMessage: string,
+): string {
+  const body =
+    records.length === 0
+      ? theme.empty(emptyMessage)
+      : records
+          .map((record) => theme.repository(record.classificationPath, record.absolutePath))
+          .join("\n\n");
+  return [
+    theme.header(title),
+    "",
+    body,
+    "",
+    theme.summary([formatCount(records.length, "repository found", "repositories found")]),
+  ].join("\n");
+}
+
+export function renderWorkspaceCollection(
+  theme: TerminalTheme,
+  workspaces: WorkspaceRecord[],
+  title: string,
+): string {
+  const body =
+    workspaces.length === 0
+      ? theme.empty("No workspaces found.")
+      : workspaces
+          .map((workspace) =>
+            theme.workspace(workspace.name, workspace.absolutePath, workspace.members.length),
+          )
+          .join("\n\n");
+  return [
+    theme.header(title),
+    "",
+    body,
+    "",
+    theme.summary([formatCount(workspaces.length, "workspace")]),
+  ].join("\n");
+}
+
+function targetClassification(target: string, rootDir: string): string {
+  const candidate = relative(rootDir, target);
+  if (candidate === "" || candidate === ".." || candidate.startsWith(`..${sep}`)) return target;
+  return candidate.split(sep).join("/");
+}
+
+export function renderOrganizePlan(
+  theme: TerminalTheme,
+  items: OrganizeDisplayItem[],
+  rootDir: string,
+  dryRun: boolean,
+): { output: string; warnings: Array<{ name: string; message: string }> } {
+  const warnings = items.flatMap(({ record, plan }) =>
+    plan.warnings.map((message) => ({ name: record.name, message })),
+  );
+  const body =
+    items.length === 0
+      ? theme.empty("No repositories need organizing.")
+      : items
+          .map(({ record, plan }) =>
+            theme.move(
+              record.name,
+              record.classificationPath,
+              targetClassification(plan.target, rootDir),
+            ),
+          )
+          .join("\n\n");
+  const summary = [
+    formatCount(items.length, "move"),
+    ...(warnings.length > 0 ? [formatCount(warnings.length, "warning")] : []),
+    ...(dryRun ? ["no files changed"] : []),
+  ];
+  return {
+    output: [theme.header("organize plan"), "", body, "", theme.summary(summary)].join("\n"),
+    warnings,
   };
 }
 
