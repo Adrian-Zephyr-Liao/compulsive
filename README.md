@@ -88,8 +88,11 @@ cpl organize --all --dry-run
 cpl organize --all --yes
 ```
 
-`organize --all` preflights every registered repository before moving anything. A target conflict
-stops the batch before the first move.
+`organize --all` rereads each repository's current `origin` before planning, but outputs only
+repositories whose canonical target has changed. A repository registered under `local/` is
+automatically promoted to `github.com/...` after an `origin` is added. The dry run does not update
+the index; classification changes are persisted only after the confirmed move succeeds. All
+repositories are still preflighted, so a target conflict stops the batch before the first move.
 
 ## Workspaces
 
