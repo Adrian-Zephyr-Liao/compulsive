@@ -760,10 +760,10 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
         ? await context.runTask("Scanning repositories", task)
         : await task();
       let output: Array<RepositoryRecord | (typeof result.repositories)[number]> =
-        result.repositories;
+        result.repositories.filter((repository) => !repository.isRegistered);
       if (parsed.flags.has("register")) {
         const registered: RepositoryRecord[] = [];
-        for (const repository of result.repositories) {
+        for (const repository of output) {
           registered.push(await context.manager.register({ path: repository.absolutePath }));
         }
         output = registered;

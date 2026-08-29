@@ -82,6 +82,33 @@ describe("cpl CLI", () => {
     await expect(manager.search()).resolves.toHaveLength(2);
   });
 
+  it("omits repositories that are already registered from later scans", async () => {
+    const scanRoot = join(sandbox, "scan");
+    const repositoryPath = join(scanRoot, "already-managed");
+    await execFileAsync("git", ["init", "-q", repositoryPath]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const output: string[] = [];
+    const context = {
+      manager,
+      stdout: (value: string) => output.push(value),
+      stderr: () => undefined,
+      copyText: async () => undefined,
+      isTTY: false,
+    };
+
+    expect(await runCli(["scan", scanRoot, "--register", "--json"], context)).toBe(0);
+    expect(JSON.parse(output.join("\n"))).toHaveLength(1);
+
+    output.length = 0;
+    expect(await runCli(["scan", scanRoot, "--json"], context)).toBe(0);
+    expect(JSON.parse(output.join("\n"))).toEqual([]);
+
+    output.length = 0;
+    expect(await runCli(["scan", scanRoot, "--register", "--json"], context)).toBe(0);
+    expect(JSON.parse(output.join("\n"))).toEqual([]);
+  });
+
   it("previews organize, applies only with --yes, and forgets without deleting", async () => {
     const repositoryPath = join(sandbox, "external", "move-me");
     await execFileAsync("git", ["init", "-q", repositoryPath]);
