@@ -1,6 +1,6 @@
 {
   "name": "@adrian-zephyr/compulsive",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "A safe local Git repository organizer and CLI.",
   "keywords": [
     "cli",
