@@ -75,8 +75,9 @@ into a failure.
 
 ## Search and migration
 
-`scan` is read-only unless `--register` is present. `forget` removes only the index entry and never
-deletes repository files.
+`scan` is read-only unless `--register` is present. Scan results include only newly discovered,
+unregistered repositories, so rerunning a scan after migration does not list repositories that are
+already organized. `forget` removes only the index entry and never deletes repository files.
 
 To migrate a directory containing existing repositories, register the discoveries, preview every
 target, and then confirm the batch:
