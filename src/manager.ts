@@ -145,6 +145,41 @@ function matchRank(record: RepositoryRecord, query: string): number {
   return 2;
 }
 
+type RepositoryMetadata =
+  | {
+      kind: "remote";
+      name: string;
+      classificationPath: string;
+      canonicalRemote: string;
+      remoteUrl: string;
+      host: string;
+      ownerPath: string[];
+    }
+  | {
+      kind: "local";
+      name: string;
+      classificationPath: string;
+    };
+
+async function readRepositoryMetadata(repositoryRoot: string): Promise<RepositoryMetadata> {
+  const remoteUrl = await readOrigin(repositoryRoot);
+  if (!remoteUrl) {
+    const name = basename(repositoryRoot);
+    return { kind: "local", name, classificationPath: `local/${name}` };
+  }
+
+  const classification = parseGitRemote(remoteUrl);
+  return {
+    kind: "remote",
+    name: classification.name,
+    classificationPath: classification.relativePath,
+    canonicalRemote: classification.canonicalRemote,
+    remoteUrl: classification.canonicalRemote,
+    host: classification.host,
+    ownerPath: classification.ownerPath,
+  };
+}
+
 export function createRepositoryManager(options: RepositoryManagerOptions = {}): RepositoryManager {
   const dataDir = resolve(options.dataDir ?? defaultDataDir());
   const defaultRootDir = resolve(options.defaultRootDir ?? join(homedir(), "Desktop", "源码"));
@@ -192,41 +227,24 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
     );
     if (existingByPath) return existingByPath;
 
-    const remoteUrl = await readOrigin(repositoryRoot);
-    const classification = remoteUrl ? parseGitRemote(remoteUrl) : undefined;
-    const existingByRemote = classification
-      ? registry.repositories.find(
-          (record) => record.canonicalRemote === classification.canonicalRemote,
-        )
-      : undefined;
+    const metadata = await readRepositoryMetadata(repositoryRoot);
+    const existingByRemote =
+      metadata.kind === "remote"
+        ? registry.repositories.find(
+            (record) => record.canonicalRemote === metadata.canonicalRemote,
+          )
+        : undefined;
     if (existingByRemote) return existingByRemote;
 
     const now = new Date().toISOString();
     const common = {
-      id: `${classification ? "remote" : "local"}:${randomUUID()}` as RepositoryRecord["id"],
+      id: `${metadata.kind}:${randomUUID()}` as RepositoryRecord["id"],
       absolutePath: repositoryRoot,
       isManaged: pathIsInside(canonicalManagedRoot, repositoryRoot),
       registeredAt: now,
       lastSeenAt: now,
     };
-    const record: RepositoryRecord =
-      classification && remoteUrl
-        ? {
-            ...common,
-            kind: "remote",
-            name: classification.name,
-            classificationPath: classification.relativePath,
-            canonicalRemote: classification.canonicalRemote,
-            remoteUrl: classification.canonicalRemote,
-            host: classification.host,
-            ownerPath: classification.ownerPath,
-          }
-        : {
-            ...common,
-            kind: "local",
-            name: basename(repositoryRoot),
-            classificationPath: `local/${basename(repositoryRoot)}`,
-          };
+    const record: RepositoryRecord = { ...common, ...metadata };
 
     registry.repositories.push(record);
     await writeJsonAtomic(paths.registry, registry);
@@ -316,21 +334,18 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
     const repositoryRoots = await discoverRepositoryRoots(scanPaths.map((path) => resolve(path)));
     const repositories = await Promise.all(
       repositoryRoots.map(async (repositoryRoot) => {
-        const remoteUrl = await readOrigin(repositoryRoot);
-        const classification = remoteUrl ? parseGitRemote(remoteUrl) : undefined;
-        const name = classification?.name ?? basename(repositoryRoot);
-        const classificationPath = classification?.relativePath ?? `local/${name}`;
+        const metadata = await readRepositoryMetadata(repositoryRoot);
         const isRegistered = registry.repositories.some(
           (record) =>
             record.absolutePath === repositoryRoot ||
-            (classification && record.canonicalRemote === classification.canonicalRemote),
+            (metadata.kind === "remote" && record.canonicalRemote === metadata.canonicalRemote),
         );
         return {
           absolutePath: repositoryRoot,
-          kind: classification ? ("remote" as const) : ("local" as const),
-          name,
-          classificationPath,
-          ...(classification ? { canonicalRemote: classification.canonicalRemote } : {}),
+          kind: metadata.kind,
+          name: metadata.name,
+          classificationPath: metadata.classificationPath,
+          ...(metadata.kind === "remote" ? { canonicalRemote: metadata.canonicalRemote } : {}),
           isRegistered,
         };
       }),
@@ -377,7 +392,12 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
 
     const source = await realpath(record.absolutePath);
     const managedRoot = await realpath(config.rootDir);
-    const target = join(managedRoot, ...record.classificationPath.split("/"));
+    const storedTarget = join(managedRoot, ...record.classificationPath.split("/"));
+    if (!pathIsInside(managedRoot, storedTarget)) {
+      throw new CompulsiveError("FILESYSTEM_FAILED", "Repository classification escapes the root.");
+    }
+    const metadata = await readRepositoryMetadata(source);
+    const target = join(managedRoot, ...metadata.classificationPath.split("/"));
     if (!pathIsInside(managedRoot, target)) {
       throw new CompulsiveError("FILESYSTEM_FAILED", "Repository classification escapes the root.");
     }
@@ -418,6 +438,7 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
     }
     if (currentPlan.isNoop) return registry.repositories[recordIndex]!;
 
+    const config = await readConfig(paths.config);
     await mkdir(dirname(currentPlan.target), { recursive: true });
     try {
       await rename(currentPlan.source, currentPlan.target);
@@ -427,27 +448,44 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
       });
     }
 
-    try {
-      const verifiedRoot = await realpath(await findRepositoryRoot(currentPlan.target));
-      if (verifiedRoot !== (await realpath(currentPlan.target))) {
-        throw new CompulsiveError("GIT_FAILED", "Moved path is not the expected repository root.");
-      }
-    } catch (error) {
+    const movedRepository = await (async () => {
       try {
-        await rename(currentPlan.target, currentPlan.source);
-      } catch {
-        throw new CompulsiveError(
-          "FILESYSTEM_FAILED",
-          "Repository verification failed and the move could not be rolled back.",
-          { cause: error },
-        );
+        const absolutePath = await realpath(await findRepositoryRoot(currentPlan.target));
+        if (absolutePath !== (await realpath(currentPlan.target))) {
+          throw new CompulsiveError(
+            "GIT_FAILED",
+            "Moved path is not the expected repository root.",
+          );
+        }
+        const metadata = await readRepositoryMetadata(absolutePath);
+        const managedRoot = await realpath(config.rootDir);
+        const currentTarget = join(managedRoot, ...metadata.classificationPath.split("/"));
+        if (currentTarget !== currentPlan.target) {
+          throw new CompulsiveError(
+            "CONFLICT",
+            "Repository classification changed while it was being organized.",
+          );
+        }
+        return { absolutePath, metadata };
+      } catch (error) {
+        try {
+          await rename(currentPlan.target, currentPlan.source);
+        } catch {
+          throw new CompulsiveError(
+            "FILESYSTEM_FAILED",
+            "Repository verification failed and the move could not be rolled back.",
+            { cause: error },
+          );
+        }
+        throw error;
       }
-      throw error;
-    }
+    })();
 
     const updated: RepositoryRecord = {
-      ...registry.repositories[recordIndex]!,
-      absolutePath: await realpath(currentPlan.target),
+      id: registry.repositories[recordIndex]!.id,
+      registeredAt: registry.repositories[recordIndex]!.registeredAt,
+      ...movedRepository.metadata,
+      absolutePath: movedRepository.absolutePath,
       isManaged: true,
       lastSeenAt: new Date().toISOString(),
     };
@@ -466,7 +504,6 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
       }
       throw error;
     }
-    const config = await readConfig(paths.config);
     await removeEmptySourceDirectories(currentPlan.source, config);
     const workspaceIssues = [];
     const workspaces = await searchWorkspaces(paths);

@@ -322,7 +322,7 @@ async function planAllRepositories(manager: RepositoryManager): Promise<BatchOrg
     targets.set(plan.target, record);
     items.push({ record, plan });
   }
-  return items;
+  return items.filter((item) => !item.plan.isNoop);
 }
 
 function printBatchPlan(items: BatchOrganizeItem[], context: CliContext): void {
@@ -850,9 +850,7 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
         const organizeAll = async () => {
           const organized: RepositoryRecord[] = [];
           for (const item of items) {
-            organized.push(
-              item.plan.isNoop ? item.record : await context.manager.organize(item.plan),
-            );
+            organized.push(await context.manager.organize(item.plan));
           }
           return organized;
         };
@@ -861,16 +859,7 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
           : await organizeAll();
         if (json) printValue(context, organized, true);
         else {
-          const moveCount = items.filter((item) => !item.plan.isNoop).length;
-          const noopCount = items.length - moveCount;
-          context.stdout(
-            context.theme.success(
-              `Organized ${String(moveCount)} repositories`,
-              noopCount === 0
-                ? undefined
-                : `${String(noopCount)} repositories were already organized.`,
-            ),
-          );
+          context.stdout(context.theme.success(`Organized ${String(items.length)} repositories`));
         }
         return;
       }

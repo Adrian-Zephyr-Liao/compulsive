@@ -173,6 +173,58 @@ describe("cpl CLI", () => {
     expect(copied).toEqual([]);
   });
 
+  it("only previews actionable repositories and detects origins added after registration", async () => {
+    const stableRepository = join(rootDir, "local", "stable");
+    const promotedRepository = join(rootDir, "local", "promoted");
+    await execFileAsync("git", ["init", "-q", stableRepository]);
+    await execFileAsync("git", ["init", "-q", promotedRepository]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    await manager.register({ path: stableRepository });
+    const promotedRecord = await manager.register({ path: promotedRepository });
+    await execFileAsync("git", [
+      "-C",
+      promotedRepository,
+      "remote",
+      "add",
+      "origin",
+      "git@github.com:acme/promoted.git",
+    ]);
+    const output: string[] = [];
+    const context = {
+      manager,
+      stdout: (value: string) => output.push(value),
+      stderr: () => undefined,
+      copyText: async () => undefined,
+      isTTY: false,
+    };
+
+    expect(await runCli(["organize", "--all", "--dry-run", "--json"], context)).toBe(0);
+    expect(JSON.parse(output.join("\n"))).toEqual([
+      expect.objectContaining({
+        repositoryId: promotedRecord.id,
+        source: await realpath(promotedRepository),
+        target: join(await realpath(rootDir), "github.com", "acme", "promoted"),
+        isNoop: false,
+      }),
+    ]);
+    await expect(manager.search({ query: "promoted" })).resolves.toEqual([promotedRecord]);
+
+    output.length = 0;
+    expect(await runCli(["organize", "--all", "--yes", "--json"], context)).toBe(0);
+    expect(JSON.parse(output.join("\n"))).toEqual([
+      expect.objectContaining({
+        id: promotedRecord.id,
+        kind: "remote",
+        classificationPath: "github.com/acme/promoted",
+      }),
+    ]);
+
+    output.length = 0;
+    expect(await runCli(["organize", "--all", "--dry-run", "--json"], context)).toBe(0);
+    expect(JSON.parse(output.join("\n"))).toEqual([]);
+  });
+
   it("preflights every repository before an organize-all move", async () => {
     const goodRepository = join(sandbox, "external", "good");
     const conflictingRepository = join(sandbox, "external", "conflict");

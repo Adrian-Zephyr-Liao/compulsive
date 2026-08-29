@@ -237,6 +237,47 @@ describe("RepositoryManager state", () => {
     await expect(access(repositoryPath)).rejects.toThrow();
   });
 
+  it("reclassifies a registered repository from its current origin only after organizing", async () => {
+    const repositoryPath = join(rootDir, "local", "promoted-repository");
+    await execFileAsync("git", ["init", "-q", repositoryPath]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const record = await manager.register({ path: repositoryPath });
+    await execFileAsync("git", [
+      "-C",
+      repositoryPath,
+      "remote",
+      "add",
+      "origin",
+      "git@github.com:acme/promoted-repository.git",
+    ]);
+
+    const plan = await manager.planOrganize(record.id);
+
+    expect(plan).toMatchObject({
+      source: await realpath(repositoryPath),
+      target: join(await realpath(rootDir), "github.com", "acme", "promoted-repository"),
+      isNoop: false,
+    });
+    await expect(manager.search({ query: "promoted-repository" })).resolves.toEqual([record]);
+
+    const organized = await manager.organize(plan);
+
+    expect(organized).toMatchObject({
+      id: record.id,
+      kind: "remote",
+      name: "promoted-repository",
+      classificationPath: "github.com/acme/promoted-repository",
+      canonicalRemote: "github.com/acme/promoted-repository",
+      remoteUrl: "github.com/acme/promoted-repository",
+      host: "github.com",
+      ownerPath: ["acme"],
+    });
+    await expect(access(repositoryPath)).rejects.toThrow();
+    await expect(access(join(plan.target, ".git"))).resolves.toBeUndefined();
+    await expect(manager.planOrganize(record.id)).resolves.toMatchObject({ isNoop: true });
+  });
+
   it("removes empty source directories after the last repository is organized", async () => {
     const legacyRoot = join(sandbox, "legacy-source");
     const firstRepository = join(legacyRoot, "team", "first-app");
