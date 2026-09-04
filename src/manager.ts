@@ -32,6 +32,7 @@ import {
   addWorkspaceMember,
   createWorkspace,
   deleteWorkspace,
+  migrateWorkspaces,
   removeWorkspaceMember,
   searchWorkspaces,
   syncWorkspace,
@@ -546,6 +547,7 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
     removeWorkspaceMember: (input: RemoveWorkspaceMemberInput) =>
       removeWorkspaceMember(paths, input),
     syncWorkspace: (id: WorkspaceId) => syncWorkspace(paths, id),
+    migrateWorkspaces: (ids?: WorkspaceId[]) => migrateWorkspaces(paths, ids),
     deleteWorkspace: (id: WorkspaceId) => deleteWorkspace(paths, id),
   };
 }

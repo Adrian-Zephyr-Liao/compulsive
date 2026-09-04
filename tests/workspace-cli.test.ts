@@ -159,6 +159,26 @@ describe("cpl workspace", () => {
 
     const updated = JSON.parse(output.join("\n")) as WorkspaceRecord;
     expect(updated.members).toMatchObject([{ mode: "worktree", branch: "feature/exact" }]);
+    expect(
+      await runCli(["workspace", "migrate", "Feature", "--json"], {
+        manager,
+        stdout: () => undefined,
+        stderr: () => undefined,
+        copyText: async () => undefined,
+        isTTY: false,
+      }),
+    ).toBe(2);
+    output.length = 0;
+    expect(
+      await runCli(["workspace", "migrate", "Feature", "--yes", "--json"], {
+        manager,
+        stdout: (value) => output.push(value),
+        stderr: () => undefined,
+        copyText: async () => undefined,
+        isTTY: false,
+      }),
+    ).toBe(0);
+    expect(JSON.parse(output.join("\n"))).toMatchObject({ migrated: 0 });
   });
 
   it("prefers exact workspace names and returns exit code 4 for true ambiguity", async () => {

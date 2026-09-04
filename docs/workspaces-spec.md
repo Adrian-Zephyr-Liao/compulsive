@@ -12,9 +12,9 @@ A workspace is a named directory plus versioned metadata. Each member uses one o
 
 - `link`: the workspace contains a symbolic link to the registered repository. Multiple workspaces
   may share the same checkout, branch, and uncommitted changes.
-- `worktree`: the workspace contains a Git worktree backed by the registered repository. Commits and
-  objects are shared, while the checked-out branch, files, dependencies, and build output are
-  isolated.
+- `worktree`: the registered repository contains a physical Git worktree under `.worktrees/`; the
+  workspace contains a symbolic link to it. Commits and objects are shared, while the checked-out
+  branch, files, dependencies, and build output are isolated.
 
 The feature targets a single-user macOS workflow and remains usable from scripts through stable JSON
 output and exit codes.
@@ -25,7 +25,8 @@ output and exit codes.
    clones its canonical checkout.
 2. `link` is the default because it is fast, transparent, and sufficient for organizational views.
 3. `worktree` requires an explicit branch. Existing branches are reused only when Git allows it;
-   creating a branch requires an explicit `--create-branch` flag.
+   creating a branch requires an explicit `--create-branch` flag and inherits the canonical
+   checkout's configured upstream when present.
 4. The default workspace root is a `Workspaces` sibling of the configured repository root. For
    example, `/Users/your-name/Code` produces `/Users/your-name/Workspaces`.
 5. `workspaceRoot` can be set during library initialization or through
@@ -47,6 +48,7 @@ cpl workspace add <workspace-query> <repository-query> [--alias <name>] [--json]
 cpl workspace add <workspace-query> <repository-query> --worktree --branch <branch> [--create-branch] [--alias <name>] [--json]
 cpl workspace remove <workspace-query> <repository-query> [--yes] [--json]
 cpl workspace sync [workspace-query] [--json]
+cpl workspace migrate [workspace-query] [--yes] [--json]
 cpl workspace go <workspace-query> [--json]
 cpl workspace delete <workspace-query> [--yes] [--json]
 ```
@@ -121,7 +123,9 @@ Constraints:
 - Member aliases are unique case-insensitively within a workspace.
 - Names and aliases are one safe path segment: no empty value, `.`, `..`, slash, backslash, or NUL.
 - Repository references use `RepositoryId`, never remote credentials or copied repository records.
-- Worktree paths must equal `<workspace.absolutePath>/<alias>` and cannot escape the workspace.
+- New worktree paths equal `<repository.absolutePath>/.worktrees/<workspace.name>`; the Workspace
+  member path is an absolute symbolic link to that directory. Legacy direct paths remain readable
+  until migrated.
 
 ## Public Library API
 
@@ -134,6 +138,7 @@ interface RepositoryManager {
   addWorkspaceMember(input: AddWorkspaceMemberInput): Promise<WorkspaceRecord>;
   removeWorkspaceMember(input: RemoveWorkspaceMemberInput): Promise<WorkspaceRecord>;
   syncWorkspace(id: WorkspaceId): Promise<WorkspaceSyncResult>;
+  migrateWorkspaces(ids?: WorkspaceId[]): Promise<WorkspaceMigrationResult>;
   deleteWorkspace(id: WorkspaceId): Promise<void>;
 }
 ```
@@ -157,18 +162,29 @@ conflict and left untouched.
 
 ## Worktree Mode Lifecycle
 
-1. Require `--branch` and validate the target workspace member path.
+1. Require `--branch` and validate both the Workspace member path and the repository-owned
+   `<repository>/.worktrees/<workspace>` target.
 2. Run Git with argument arrays only:
-   - Existing branch: `git -C <repository> worktree add -- <path> <branch>`.
-   - New branch: `git -C <repository> worktree add -b <branch> -- <path>`.
-3. Verify the target is a Git worktree associated with the registered repository.
-4. Atomically persist the member.
+   - Existing branch: `git -C <repository> worktree add -- <target> <branch>`.
+   - New branch: `git -C <repository> worktree add -b <branch> -- <target>`.
+3. Add `/.worktrees/` to the repository-local Git exclude file.
+4. Verify the target, then create an absolute symbolic link at `<workspace>/<alias>`.
+5. Atomically persist the member.
 
 Git rejects a branch already checked out by another worktree. Compulsive surfaces this as a conflict
 and does not retry with a different branch.
 
 If persistence fails, Compulsive removes the newly created clean worktree through
 `git worktree remove`; inability to roll back is a filesystem failure with both errors attached.
+
+`workspace migrate` preflights every selected legacy worktree, moves deepest paths first with
+`git worktree move`, preserves dirty state, replaces each old path with a link, and writes the
+registry once. A legacy branch without an upstream inherits the canonical checkout's current
+upstream. A move or persistence failure rolls completed moves and tracking changes back.
+For worktrees declaring submodules, migration renames the verified worktree and runs
+`git worktree repair`; other Git move failures are not bypassed.
+Overlapping legacy worktree paths are rejected during preflight because replacing a nested Git
+submodule checkout with a symbolic link can invalidate the parent worktree.
 
 ## Remove and Delete Safety
 
@@ -181,6 +197,7 @@ Removing a `link` member:
 Removing a `worktree` member:
 
 - Verify it belongs to the expected repository.
+- Verify the Workspace link resolves to the recorded physical worktree.
 - Require an empty `git status --porcelain` result.
 - Run `git worktree remove -- <path>` without `--force`.
 - Update metadata only after Git confirms removal.
@@ -199,8 +216,7 @@ The CLI requires confirmation unless `--yes` is supplied. JSON mode remains non-
 ## Repository Move Integration
 
 After `organize` successfully moves and indexes a repository, Compulsive synchronizes all `link`
-members referencing that repository. Worktree members require no path repair because they are
-independent working directories.
+members referencing that repository.
 
 If link synchronization encounters a conflict, the repository remains safely organized and the CLI
 returns a filesystem/conflict diagnostic naming the affected workspace. `cpl workspace sync` and

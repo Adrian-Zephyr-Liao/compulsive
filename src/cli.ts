@@ -443,20 +443,34 @@ async function inspectWorkspaceMember(
     return `link -> ${resolvedRepository}`;
   }
 
-  if (!entry.isDirectory() || entry.isSymbolicLink()) {
+  const legacy = resolve(member.worktreePath) === resolve(memberPath);
+  if (!legacy) {
+    const expectedPath = join(repository.absolutePath, ".worktrees", workspace.name);
+    if (resolve(member.worktreePath) !== resolve(expectedPath)) {
+      throw new Error("Managed worktree path does not match workspace metadata.");
+    }
+    if (!entry.isSymbolicLink()) throw new Error("Member path is not a symbolic link.");
+    if ((await realpath(memberPath)) !== (await realpath(member.worktreePath))) {
+      throw new Error("Symbolic link points to a different worktree.");
+    }
+  } else if (!entry.isDirectory() || entry.isSymbolicLink()) {
     throw new Error("Member path is not a Git worktree directory.");
   }
+  const worktreeEntry = await lstat(member.worktreePath);
+  if (!worktreeEntry.isDirectory() || worktreeEntry.isSymbolicLink()) {
+    throw new Error("Managed worktree is not a directory.");
+  }
   const [memberCommon, repositoryCommon, branch, status] = await Promise.all([
-    gitCommonDirectory(memberPath),
+    gitCommonDirectory(member.worktreePath),
     gitCommonDirectory(repository.absolutePath),
-    runGit(["branch", "--show-current"], { cwd: memberPath }),
-    runGit(["status", "--porcelain"], { cwd: memberPath }),
+    runGit(["branch", "--show-current"], { cwd: member.worktreePath }),
+    runGit(["status", "--porcelain"], { cwd: member.worktreePath }),
   ]);
   if (memberCommon !== repositoryCommon || branch.stdout !== member.branch) {
     throw new Error("Git worktree identity does not match workspace metadata.");
   }
   if (status.stdout) throw new Error("Git worktree has uncommitted changes.");
-  return `worktree ${member.branch}`;
+  return `worktree ${member.branch} -> ${member.worktreePath}`;
 }
 
 async function handleDoctor(context: CliContext, json: boolean): Promise<void> {
@@ -676,6 +690,36 @@ async function handleWorkspace(
     if (results.some((result) => result.issues.length > 0)) {
       throw new CompulsiveError("CONFLICT", "One or more workspace members could not be synced.");
     }
+    return;
+  }
+
+  if (action === "migrate") {
+    const query = arguments_.join(" ").trim();
+    const workspaces = query
+      ? [await selectOneWorkspace(context.manager, query, context, allowPrompt)]
+      : await context.manager.searchWorkspaces();
+    if (!parsed.flags.has("yes")) {
+      if (!allowPrompt) {
+        throw new CompulsiveError(
+          "INVALID_INPUT",
+          "Use --yes to migrate workspaces non-interactively.",
+        );
+      }
+      const confirmed = await context.confirm(
+        query
+          ? `Migrate legacy worktrees in workspace ${workspaces[0]!.name}?`
+          : `Migrate legacy worktrees in ${String(workspaces.length)} workspaces?`,
+      );
+      if (!confirmed) throw new CliCancelled();
+    }
+    const result = await context.manager.migrateWorkspaces(
+      query ? workspaces.map((workspace) => workspace.id) : undefined,
+    );
+    printValue(
+      context,
+      json ? result : context.theme.success(`Migrated ${formatCount(result.migrated, "worktree")}`),
+      json,
+    );
     return;
   }
 

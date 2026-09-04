@@ -138,7 +138,7 @@ function isSafePathSegment(value: unknown): value is string {
   );
 }
 
-function isWorkspaceMember(value: unknown, workspacePath: string): boolean {
+function isWorkspaceMember(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const member = value as Record<string, unknown>;
   if (
@@ -153,8 +153,7 @@ function isWorkspaceMember(value: unknown, workspacePath: string): boolean {
     typeof member.branch === "string" &&
     member.branch.length > 0 &&
     typeof member.worktreePath === "string" &&
-    isAbsolute(member.worktreePath) &&
-    resolve(member.worktreePath) === resolve(workspacePath, member.alias)
+    isAbsolute(member.worktreePath)
   );
 }
 
@@ -170,7 +169,7 @@ function isWorkspaceRecord(value: unknown): boolean {
     !Array.isArray(workspace.members) ||
     typeof workspace.createdAt !== "string" ||
     typeof workspace.updatedAt !== "string" ||
-    !workspace.members.every((member) => isWorkspaceMember(member, workspacePath))
+    !workspace.members.every((member) => isWorkspaceMember(member))
   ) {
     return false;
   }

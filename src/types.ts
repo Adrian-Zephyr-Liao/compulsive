@@ -150,6 +150,11 @@ export interface WorkspaceSyncResult {
   issues: WorkspaceSyncIssue[];
 }
 
+export interface WorkspaceMigrationResult {
+  workspaces: WorkspaceRecord[];
+  migrated: number;
+}
+
 export interface RepositoryManagerOptions {
   dataDir?: string;
   defaultRootDir?: string;
@@ -171,5 +176,6 @@ export interface RepositoryManager {
   addWorkspaceMember(input: AddWorkspaceMemberInput): Promise<WorkspaceRecord>;
   removeWorkspaceMember(input: RemoveWorkspaceMemberInput): Promise<WorkspaceRecord>;
   syncWorkspace(id: WorkspaceId): Promise<WorkspaceSyncResult>;
+  migrateWorkspaces(ids?: WorkspaceId[]): Promise<WorkspaceMigrationResult>;
   deleteWorkspace(id: WorkspaceId): Promise<void>;
 }

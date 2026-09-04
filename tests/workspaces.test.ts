@@ -379,6 +379,16 @@ describe("workspace state", () => {
 
     expect(firstUpdated.members[0]).toMatchObject({ mode: "worktree", branch: "feature/one" });
     expect(secondUpdated.members[0]).toMatchObject({ mode: "worktree", branch: "feature/two" });
+    const firstWorktree = join(repositoryPath, ".worktrees", first.name);
+    const secondWorktree = join(repositoryPath, ".worktrees", second.name);
+    expect(firstUpdated.members[0]).toMatchObject({ worktreePath: await realpath(firstWorktree) });
+    expect(secondUpdated.members[0]).toMatchObject({
+      worktreePath: await realpath(secondWorktree),
+    });
+    expect((await lstat(join(first.absolutePath, "app"))).isSymbolicLink()).toBe(true);
+    expect(await readlink(join(first.absolutePath, "app"))).toBe(await realpath(firstWorktree));
+    expect((await lstat(join(second.absolutePath, "app"))).isSymbolicLink()).toBe(true);
+    expect(await readlink(join(second.absolutePath, "app"))).toBe(await realpath(secondWorktree));
     expect(
       (
         await execFileAsync("git", [
@@ -399,16 +409,25 @@ describe("workspace state", () => {
         ])
       ).stdout.trim(),
     ).toBe("feature/two");
+    expect(
+      (await execFileAsync("git", ["-C", repositoryPath, "status", "--porcelain"])).stdout,
+    ).toBe("");
+    expect(await readFile(join(repositoryPath, ".git", "info", "exclude"), "utf8")).toContain(
+      "/.worktrees/",
+    );
   });
 
   it("creates the exact requested branch only with explicit authorization", async () => {
+    const remotePath = join(sandbox, "remote.git");
     const repositoryPath = join(sandbox, "repositories", "new-branch");
-    await execFileAsync("git", ["init", "-q", "-b", "main", repositoryPath]);
+    await execFileAsync("git", ["init", "-q", "--bare", "-b", "main", remotePath]);
+    await execFileAsync("git", ["clone", "-q", `file://${remotePath}`, repositoryPath]);
     await execFileAsync("git", ["-C", repositoryPath, "config", "user.name", "Compulsive Test"]);
     await execFileAsync("git", ["-C", repositoryPath, "config", "user.email", "test@example.com"]);
     await writeFile(join(repositoryPath, "README.md"), "initial\n");
     await execFileAsync("git", ["-C", repositoryPath, "add", "README.md"]);
     await execFileAsync("git", ["-C", repositoryPath, "commit", "-q", "-m", "initial"]);
+    await execFileAsync("git", ["-C", repositoryPath, "push", "-q", "-u", "origin", "main"]);
     const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
     await manager.initialize();
     const repository = await manager.register({ path: repositoryPath });
@@ -433,6 +452,188 @@ describe("workspace state", () => {
         ])
       ).stdout,
     ).not.toBe("");
+    expect(
+      (
+        await execFileAsync("git", [
+          "-C",
+          join(workspace.absolutePath, repository.name),
+          "rev-parse",
+          "--abbrev-ref",
+          "--symbolic-full-name",
+          "@{upstream}",
+        ])
+      ).stdout.trim(),
+    ).toBe("origin/main");
+  });
+
+  it("migrates a dirty legacy worktree into the canonical repository and leaves a link", async () => {
+    const remotePath = join(sandbox, "legacy-remote.git");
+    const submodulePath = join(sandbox, "submodule");
+    const repositoryPath = join(sandbox, "repositories", "legacy-worktree");
+    await execFileAsync("git", ["init", "-q", "-b", "main", submodulePath]);
+    await execFileAsync("git", ["-C", submodulePath, "config", "user.name", "Compulsive Test"]);
+    await execFileAsync("git", ["-C", submodulePath, "config", "user.email", "test@example.com"]);
+    await writeFile(join(submodulePath, "module.txt"), "module\n");
+    await execFileAsync("git", ["-C", submodulePath, "add", "module.txt"]);
+    await execFileAsync("git", ["-C", submodulePath, "commit", "-q", "-m", "module"]);
+    await execFileAsync("git", ["init", "-q", "--bare", "-b", "main", remotePath]);
+    await execFileAsync("git", ["clone", "-q", `file://${remotePath}`, repositoryPath]);
+    await execFileAsync("git", ["-C", repositoryPath, "config", "user.name", "Compulsive Test"]);
+    await execFileAsync("git", ["-C", repositoryPath, "config", "user.email", "test@example.com"]);
+    await writeFile(join(repositoryPath, "README.md"), "initial\n");
+    await execFileAsync("git", ["-C", repositoryPath, "add", "README.md"]);
+    await execFileAsync("git", ["-C", repositoryPath, "commit", "-q", "-m", "initial"]);
+    await execFileAsync("git", [
+      "-c",
+      "protocol.file.allow=always",
+      "-C",
+      repositoryPath,
+      "submodule",
+      "add",
+      "-q",
+      `file://${submodulePath}`,
+      "vendor/submodule",
+    ]);
+    await execFileAsync("git", ["-C", repositoryPath, "commit", "-q", "-am", "submodule"]);
+    await execFileAsync("git", ["-C", repositoryPath, "push", "-q", "-u", "origin", "main"]);
+    await execFileAsync("git", ["-C", repositoryPath, "branch", "legacy-branch"]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const repository = await manager.register({ path: repositoryPath });
+    const workspace = await manager.createWorkspace({ name: "Legacy" });
+    const legacyPath = join(workspace.absolutePath, repository.name);
+    await execFileAsync("git", [
+      "-C",
+      repositoryPath,
+      "worktree",
+      "add",
+      "-q",
+      legacyPath,
+      "legacy-branch",
+    ]);
+    await execFileAsync("git", [
+      "-c",
+      "protocol.file.allow=always",
+      "-C",
+      legacyPath,
+      "submodule",
+      "update",
+      "--init",
+      "-q",
+    ]);
+    await writeFile(join(legacyPath, "README.md"), "dirty\n");
+    await writeFile(join(legacyPath, "untracked.txt"), "keep\n");
+    const before = (await execFileAsync("git", ["-C", legacyPath, "status", "--porcelain"])).stdout;
+    const paths = createStoragePaths(dataDir);
+    const registry = await readWorkspaceRegistry(paths.workspaces);
+    registry.workspaces[0]!.members = [
+      {
+        repositoryId: repository.id,
+        alias: repository.name,
+        mode: "worktree",
+        branch: "legacy-branch",
+        worktreePath: legacyPath,
+      },
+    ];
+    await writeFile(paths.workspaces, `${JSON.stringify(registry, undefined, 2)}\n`);
+
+    const result = await manager.migrateWorkspaces();
+
+    const target = join(repositoryPath, ".worktrees", workspace.name);
+    expect(result.migrated).toBe(1);
+    expect((await lstat(legacyPath)).isSymbolicLink()).toBe(true);
+    expect(await readlink(legacyPath)).toBe(await realpath(target));
+    expect((await execFileAsync("git", ["-C", target, "status", "--porcelain"])).stdout).toBe(
+      before,
+    );
+    expect(await readFile(join(target, "untracked.txt"), "utf8")).toBe("keep\n");
+    expect(
+      (
+        await execFileAsync("git", [
+          "-C",
+          target,
+          "rev-parse",
+          "--abbrev-ref",
+          "--symbolic-full-name",
+          "@{upstream}",
+        ])
+      ).stdout.trim(),
+    ).toBe("origin/main");
+    await expect(readWorkspaceRegistry(paths.workspaces)).resolves.toMatchObject({
+      workspaces: [{ members: [{ worktreePath: await realpath(target) }] }],
+    });
+  });
+
+  it("rejects overlapping legacy worktrees before moving either path", async () => {
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const repositories = [];
+    for (const name of ["parent-repository", "child-repository"]) {
+      const repositoryPath = join(sandbox, "repositories", name);
+      await execFileAsync("git", ["init", "-q", "-b", "main", repositoryPath]);
+      await execFileAsync("git", ["-C", repositoryPath, "config", "user.name", "Compulsive Test"]);
+      await execFileAsync("git", [
+        "-C",
+        repositoryPath,
+        "config",
+        "user.email",
+        "test@example.com",
+      ]);
+      await execFileAsync("git", [
+        "-C",
+        repositoryPath,
+        "commit",
+        "--allow-empty",
+        "-q",
+        "-m",
+        "initial",
+      ]);
+      await execFileAsync("git", ["-C", repositoryPath, "branch", "legacy"]);
+      repositories.push(await manager.register({ path: repositoryPath }));
+    }
+    const parent = await manager.createWorkspace({ name: "Parent" });
+    const parentPath = join(parent.absolutePath, repositories[0]!.name);
+    await execFileAsync("git", [
+      "-C",
+      repositories[0]!.absolutePath,
+      "worktree",
+      "add",
+      "-q",
+      parentPath,
+      "legacy",
+    ]);
+    const child = await manager.createWorkspace({
+      name: "Child",
+      path: join(parentPath, "nested"),
+    });
+    const childPath = join(child.absolutePath, repositories[1]!.name);
+    await execFileAsync("git", [
+      "-C",
+      repositories[1]!.absolutePath,
+      "worktree",
+      "add",
+      "-q",
+      childPath,
+      "legacy",
+    ]);
+    const paths = createStoragePaths(dataDir);
+    const registry = await readWorkspaceRegistry(paths.workspaces);
+    for (const [index, workspace] of [parent, child].entries()) {
+      registry.workspaces.find((item) => item.id === workspace.id)!.members = [
+        {
+          repositoryId: repositories[index]!.id,
+          alias: repositories[index]!.name,
+          mode: "worktree",
+          branch: "legacy",
+          worktreePath: index === 0 ? parentPath : childPath,
+        },
+      ];
+    }
+    await writeFile(paths.workspaces, `${JSON.stringify(registry, undefined, 2)}\n`);
+
+    await expect(manager.migrateWorkspaces()).rejects.toMatchObject({ code: "CONFLICT" });
+    expect((await lstat(parentPath)).isDirectory()).toBe(true);
+    expect((await lstat(childPath)).isDirectory()).toBe(true);
   });
 
   it("surfaces a conflict when a branch is already checked out elsewhere", async () => {

@@ -27,6 +27,7 @@ export type {
   WorkspaceId,
   WorkspaceMember,
   WorkspaceMemberMode,
+  WorkspaceMigrationResult,
   WorkspaceRecord,
   WorkspaceRegistry,
   WorkspaceSyncIssue,

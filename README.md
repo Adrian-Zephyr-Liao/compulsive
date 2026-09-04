@@ -122,10 +122,16 @@ cpl workspace add Product web \
   --create-branch
 ```
 
+The physical worktree is stored at `<canonical-repository>/.worktrees/<workspace>`. The Workspace
+member is an absolute symbolic link to it. A newly created branch inherits the canonical checkout's
+upstream when one is configured. Migration applies the same rule only to legacy branches that have
+no upstream.
+
 Common maintenance commands:
 
 ```bash
 cpl workspace sync Product
+cpl workspace migrate --yes
 cpl workspace remove Product api --yes
 cpl workspace delete Product --yes
 ```
