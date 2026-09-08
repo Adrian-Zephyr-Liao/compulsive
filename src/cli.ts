@@ -469,8 +469,7 @@ async function inspectWorkspaceMember(
   if (memberCommon !== repositoryCommon || branch.stdout !== member.branch) {
     throw new Error("Git worktree identity does not match workspace metadata.");
   }
-  if (status.stdout) throw new Error("Git worktree has uncommitted changes.");
-  return `worktree ${member.branch} -> ${member.worktreePath}`;
+  return `worktree ${member.branch} -> ${member.worktreePath}${status.stdout ? " (dirty)" : ""}`;
 }
 
 async function handleDoctor(context: CliContext, json: boolean): Promise<void> {

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdtemp, realpath, rm, unlink } from "node:fs/promises";
+import { access, mkdtemp, realpath, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -296,5 +296,55 @@ describe("cpl workspace", () => {
     );
     await expect(access(memberPath)).rejects.toThrow();
     expect(errors.join("\n")).toContain("FILESYSTEM_FAILED");
+  });
+
+  it("reports a dirty worktree without treating it as broken", async () => {
+    const repositoryPath = join(sandbox, "repositories", "dirty-doctor");
+    await execFileAsync("git", ["init", "-q", "-b", "main", repositoryPath]);
+    await execFileAsync("git", [
+      "-C",
+      repositoryPath,
+      "commit",
+      "--allow-empty",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const repository = await manager.register({ path: repositoryPath });
+    const workspace = await manager.createWorkspace({ name: "Dirty Doctor" });
+    const updated = await manager.addWorkspaceMember({
+      workspaceId: workspace.id,
+      repositoryId: repository.id,
+      mode: "worktree",
+      branch: "feature/dirty-doctor",
+      createBranch: true,
+    });
+    const member = updated.members[0]!;
+    if (member.mode !== "worktree") throw new Error("Expected a worktree member.");
+    await writeFile(join(member.worktreePath, "scratch.txt"), "unfinished\n");
+    const output: string[] = [];
+    const errors: string[] = [];
+
+    expect(
+      await runCli(["doctor", "--json"], {
+        manager,
+        stdout: (value) => output.push(value),
+        stderr: (value) => errors.push(value),
+        copyText: async () => undefined,
+        isTTY: false,
+      }),
+    ).toBe(0);
+    expect(JSON.parse(output.join("\n"))).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "workspace:Dirty Doctor/dirty-doctor",
+          ok: true,
+          detail: expect.stringContaining("(dirty)"),
+        }),
+      ]),
+    );
+    expect(errors).toEqual([]);
   });
 });
