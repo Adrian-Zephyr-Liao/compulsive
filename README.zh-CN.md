@@ -100,8 +100,8 @@ Workspace 是相关项目的组合目录，不改变仓库的规范存储位置�
 同级 `Workspaces`，例如 `/Users/your-name/Code` 对应
 `/Users/your-name/Workspaces`。
 
-链接模式是默认选择。同一个 canonical 仓库可以同时加入多个 Workspace，各处共享当前
-分支、未提交修改和构建文件：
+Workspace 成员默认使用独立 Git worktree。不传 `--branch` 时，Compulsive 会从 canonical
+仓库当前提交创建 `workspace/<workspace>/<alias>` 分支：
 
 ```bash
 cpl workspace create Product
@@ -114,17 +114,16 @@ cpl workspace go Product
 cpl search shared --workspace Platform
 ```
 
-需要独立分支和工作目录时，显式使用 Git worktree。复用现有分支：
+复用现有分支时显式传入 `--branch`：
 
 ```bash
-cpl workspace add Product web --worktree --branch feature/product-web
+cpl workspace add Product web --branch feature/product-web
 ```
 
 创建新分支必须同时提供 `--create-branch`，分支名会严格使用 `--branch` 的原值：
 
 ```bash
 cpl workspace add Product worker \
-  --worktree \
   --branch feature/product-worker \
   --create-branch
 ```

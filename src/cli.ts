@@ -607,9 +607,6 @@ async function handleWorkspace(
   if (action === "add") {
     const workspaceQuery = requireValue(arguments_[0], "Workspace query");
     const repositoryQuery = requireValue(arguments_[1], "Repository query");
-    if (parsed.flags.has("create-branch") && !parsed.flags.has("worktree")) {
-      throw new CompulsiveError("INVALID_INPUT", "--create-branch requires --worktree.");
-    }
     const workspace = await selectOneWorkspace(
       context.manager,
       workspaceQuery,
@@ -617,21 +614,26 @@ async function handleWorkspace(
       allowPrompt,
     );
     const repository = await selectOne(context.manager, repositoryQuery, context, allowPrompt);
-    const alias = parsed.values.get("alias");
-    const updated = parsed.flags.has("worktree")
-      ? await context.manager.addWorkspaceMember({
-          workspaceId: workspace.id,
-          repositoryId: repository.id,
-          mode: "worktree",
-          branch: requireValue(parsed.values.get("branch"), "Worktree branch"),
-          createBranch: parsed.flags.has("create-branch"),
-          ...(alias === undefined ? {} : { alias }),
-        })
-      : await context.manager.addWorkspaceMember({
-          workspaceId: workspace.id,
-          repositoryId: repository.id,
-          ...(alias === undefined ? {} : { alias }),
-        });
+    const alias = parsed.values.get("alias") ?? repository.name;
+    const explicitBranch = parsed.values.get("branch");
+    const readableBranch = `workspace/${workspace.name}/${alias}`;
+    const validReadableBranch = await runGit(["check-ref-format", "--branch", readableBranch], {
+      cwd: repository.absolutePath,
+      allowFailure: true,
+    });
+    const branch =
+      explicitBranch ??
+      (validReadableBranch.exitCode === 0
+        ? readableBranch
+        : `workspace/${workspace.id.split(":").at(-1)!}/${repository.id.split(":").at(-1)!}`);
+    const updated = await context.manager.addWorkspaceMember({
+      workspaceId: workspace.id,
+      repositoryId: repository.id,
+      mode: "worktree",
+      branch,
+      createBranch: explicitBranch === undefined || parsed.flags.has("create-branch"),
+      alias,
+    });
     printValue(context, json ? updated : describeWorkspace(updated, context), json);
     return;
   }

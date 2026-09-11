@@ -30,6 +30,7 @@ WORKSPACES
   cpl workspace|ws list [query] [--json]
   cpl workspace|ws show|go <workspace-query> [--json]
   cpl workspace|ws add <workspace-query> <repository-query> [options]
+                              Add an isolated Git worktree by default
   cpl workspace|ws remove <workspace-query> <repository-query> [--yes] [--json]
   cpl workspace|ws sync [workspace-query] [--json]
   cpl workspace|ws migrate [workspace-query] [--yes] [--json]

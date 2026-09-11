@@ -23,10 +23,11 @@ output and exit codes.
 
 1. Repository storage remains authoritative. Adding a repository to a workspace never moves or
    clones its canonical checkout.
-2. `link` is the default because it is fast, transparent, and sufficient for organizational views.
-3. `worktree` requires an explicit branch. Existing branches are reused only when Git allows it;
-   creating a branch requires an explicit `--create-branch` flag and inherits the canonical
-   checkout's configured upstream when present.
+2. CLI additions default to isolated `worktree` members. Link members remain readable for backward
+   compatibility and through the library API.
+3. Without `--branch`, the CLI creates a workspace-specific branch. Existing branches are reused
+   only when explicitly selected; `--create-branch` creates an explicitly named branch and inherits
+   the canonical checkout's configured upstream when present.
 4. The default workspace root is a `Workspaces` sibling of the configured repository root. For
    example, `/Users/your-name/Code` produces `/Users/your-name/Workspaces`.
 5. `workspaceRoot` can be set during library initialization or through
@@ -44,8 +45,7 @@ output and exit codes.
 cpl workspace create <name> [--path <path>] [--json]
 cpl workspace list [query] [--json]
 cpl workspace show <workspace-query> [--json]
-cpl workspace add <workspace-query> <repository-query> [--alias <name>] [--json]
-cpl workspace add <workspace-query> <repository-query> --worktree --branch <branch> [--create-branch] [--alias <name>] [--json]
+cpl workspace add <workspace-query> <repository-query> [--branch <branch>] [--create-branch] [--alias <name>] [--json]
 cpl workspace remove <workspace-query> <repository-query> [--yes] [--json]
 cpl workspace sync [workspace-query] [--json]
 cpl workspace migrate [workspace-query] [--yes] [--json]
@@ -162,8 +162,8 @@ conflict and left untouched.
 
 ## Worktree Mode Lifecycle
 
-1. Require `--branch` and validate both the Workspace member path and the repository-owned
-   `<repository>/.worktrees/<workspace>` target.
+1. Resolve the explicit branch or create a workspace-specific default branch, then validate both
+   the Workspace member path and the repository-owned `<repository>/.worktrees/<workspace>` target.
 2. Run Git with argument arrays only:
    - Existing branch: `git -C <repository> worktree add -- <target> <branch>`.
    - New branch: `git -C <repository> worktree add -b <branch> -- <target>`.

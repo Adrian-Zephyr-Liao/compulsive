@@ -100,8 +100,8 @@ A Workspace groups related projects without changing their canonical storage loc
 default Workspace root is a sibling of the repository root—for example,
 `/Users/your-name/Workspaces` next to `/Users/your-name/Code`.
 
-Link mode is the default. Multiple Workspaces can share the same checkout, current branch,
-uncommitted changes, and build files:
+Workspace members use isolated Git worktrees by default. Without `--branch`, Compulsive creates a
+`workspace/<workspace>/<alias>` branch from the canonical checkout's current commit:
 
 ```bash
 cpl workspace create Product
@@ -113,13 +113,11 @@ cpl workspace go Product
 cpl search shared --workspace Platform
 ```
 
-Use a Git worktree when a Workspace needs an isolated branch and working directory:
+Use `--branch` to reuse an existing branch, or add `--create-branch` to create the exact branch:
 
 ```bash
-cpl workspace add Product web \
-  --worktree \
-  --branch feature/product-web \
-  --create-branch
+cpl workspace add Product web --branch feature/product-web
+cpl workspace add Product worker --branch feature/product-worker --create-branch
 ```
 
 The physical worktree is stored at `<canonical-repository>/.worktrees/<workspace>`. The Workspace

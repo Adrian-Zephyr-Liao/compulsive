@@ -28,12 +28,25 @@ describe("cpl workspace", () => {
     await rm(sandbox, { recursive: true, force: true });
   });
 
-  it("creates, inspects, links, navigates, removes, and deletes a workspace", async () => {
+  it("creates, inspects, adds, navigates, removes, and deletes a workspace", async () => {
     const repositoryPath = join(sandbox, "repositories", "web app");
     await execFileAsync("git", ["init", "-q", repositoryPath]);
+    await execFileAsync("git", [
+      "-C",
+      repositoryPath,
+      "-c",
+      "user.name=Compulsive Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "--allow-empty",
+      "-q",
+      "-m",
+      "initial",
+    ]);
     const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
     await manager.initialize();
-    await manager.register({ path: repositoryPath });
+    const repository = await manager.register({ path: repositoryPath });
     const output: string[] = [];
     const errors: string[] = [];
     const copied: string[] = [];
@@ -57,9 +70,14 @@ describe("cpl workspace", () => {
         context,
       ),
     ).toBe(0);
-    expect((JSON.parse(output.pop()!) as WorkspaceRecord).members).toMatchObject([
-      { alias: "frontend", mode: "link" },
-    ]);
+    const updated = JSON.parse(output.pop()!) as WorkspaceRecord;
+    expect(updated.members).toMatchObject([{ alias: "frontend", mode: "worktree" }]);
+    expect(updated.members[0]).toMatchObject({
+      branch: `workspace/${workspace.id.split(":").at(-1)!}/${repository.id.split(":").at(-1)!}`,
+    });
+    expect(await realpath(join(workspace.absolutePath, "frontend"))).not.toBe(
+      await realpath(repositoryPath),
+    );
 
     expect(await runCli(["ws", "show", "Client Apps", "--json"], context)).toBe(0);
     expect((JSON.parse(output.pop()!) as WorkspaceRecord).id).toBe(workspace.id);
