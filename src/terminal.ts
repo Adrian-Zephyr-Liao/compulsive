@@ -37,6 +37,7 @@ WORKSPACES
   cpl workspace|ws delete <workspace-query> [--yes] [--json]
 
 SYSTEM
+  cpl ui [--no-open]         Open the local Workspace DevTool
   cpl config show
   cpl config set-root|set-workspace-root <path>
   cpl config add-scan-root|remove-scan-root <path>

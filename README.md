@@ -60,6 +60,16 @@ cpl doctor
 Run `cpl` without a command in an interactive terminal to open a searchable repository and
 Workspace picker.
 
+Open the local Workspace DevTool to create Workspaces, add only the repositories a task needs,
+sync worktrees, and copy the resulting `cd` command:
+
+```bash
+cpl ui
+```
+
+The DevTool is served on localhost with Devframe authentication and opens in the browser. Use
+`cpl ui --no-open` to start it without opening a new tab.
+
 ## Directory model
 
 Remote repositories are classified by host, owner path, and repository name:

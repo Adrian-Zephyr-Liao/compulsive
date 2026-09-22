@@ -542,8 +542,22 @@ export async function addWorkspaceMember(
 
   let member: WorkspaceMember;
   if (input.mode === "worktree") {
-    const branch = input.branch.trim();
-    if (!branch) throw new CompulsiveError("INVALID_INPUT", "Worktree branch is required.");
+    const explicitBranch = input.branch?.trim();
+    if (input.branch !== undefined && !explicitBranch) {
+      throw new CompulsiveError("INVALID_INPUT", "Worktree branch is required.");
+    }
+    const readableBranch = `workspace/${workspace.name}/${alias}`;
+    const validReadableBranch = explicitBranch
+      ? undefined
+      : await runGit(["check-ref-format", "--branch", readableBranch], {
+          cwd: repository.absolutePath,
+          allowFailure: true,
+        });
+    const branch =
+      explicitBranch ??
+      (validReadableBranch?.exitCode === 0
+        ? readableBranch
+        : `workspace/${workspace.id.split(":").at(-1)!}/${repository.id.split(":").at(-1)!}`);
     const worktreePath = managedWorktreePath(repository.absolutePath, workspace);
     if (await pathEntryExists(worktreePath)) {
       throw new CompulsiveError(
@@ -552,16 +566,9 @@ export async function addWorkspaceMember(
       );
     }
     await ensureManagedWorktreeRoot(repository.absolutePath);
-    const upstream = input.createBranch
-      ? await currentUpstream(repository.absolutePath)
-      : undefined;
-    await addGitWorktree(
-      repository.absolutePath,
-      worktreePath,
-      branch,
-      input.createBranch === true,
-      upstream,
-    );
+    const createBranch = explicitBranch === undefined || input.createBranch === true;
+    const upstream = createBranch ? await currentUpstream(repository.absolutePath) : undefined;
+    await addGitWorktree(repository.absolutePath, worktreePath, branch, createBranch, upstream);
     try {
       await verifyManagedWorktree(worktreePath, repository.absolutePath, branch);
       await createVerifiedLink(memberPath, worktreePath);

@@ -69,6 +69,33 @@ describe("cpl CLI", () => {
     expect(stderr).toEqual([]);
   });
 
+  it("starts the Workspace DevTool through cpl ui", async () => {
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const output: string[] = [];
+    let started = false;
+
+    expect(
+      await runCli(["ui", "--no-open", "--no-color"], {
+        manager,
+        stdout: (value) => output.push(value),
+        stderr: () => undefined,
+        copyText: async () => undefined,
+        isTTY: false,
+        startDevtool: async (receivedManager, options) => {
+          expect(receivedManager).toBe(manager);
+          expect(options).toEqual({ openBrowser: false });
+          started = true;
+          return { origin: "http://localhost:7392" };
+        },
+      }),
+    ).toBe(0);
+
+    expect(started).toBe(true);
+    expect(output.join("\n")).toContain("DevTool ready");
+    expect(output.join("\n")).toContain("http://localhost:7392");
+  });
+
   it("keeps scan read-only unless --register is provided", async () => {
     const scanRoot = join(sandbox, "scan");
     const repositoryPath = join(scanRoot, "found-repo");

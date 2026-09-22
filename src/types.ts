@@ -130,7 +130,7 @@ export type AddWorkspaceMemberInput = {
   workspaceId: WorkspaceId;
   repositoryId: RepositoryId;
   alias?: string;
-} & ({ mode?: "link" } | { mode: "worktree"; branch: string; createBranch?: boolean });
+} & ({ mode?: "link" } | { mode: "worktree"; branch?: string; createBranch?: boolean });
 
 export interface RemoveWorkspaceMemberInput {
   workspaceId: WorkspaceId;

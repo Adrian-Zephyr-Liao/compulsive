@@ -83,6 +83,16 @@ macOS 剪贴板并打印出来。剪贴板不可用时只会显示警告，不�
 `cpl search` 只搜索仓库，`cpl workspace` 只搜索 Workspace。选择目标后会复制并打印安全的
 `cd` 命令。脚本和管道环境不会显示交互提示。
 
+运行本地 Workspace DevTool，可以创建 Workspace、按任务加入所需仓库、同步 worktree，并复制
+最终的 `cd` 命令：
+
+```bash
+cpl ui
+```
+
+DevTool 通过 Devframe 在 localhost 提供带认证的页面，并自动打开浏览器。使用
+`cpl ui --no-open` 可以只启动服务、不新开标签页。
+
 批量迁移时，先登记扫描结果，再统一预演全部目标路径：
 
 ```bash

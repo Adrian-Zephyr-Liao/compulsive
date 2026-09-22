@@ -50,14 +50,17 @@
     "access": "public"
   },
   "scripts": {
-    "build": "vp pack",
+    "build": "vp pack && pnpm run build:devtool",
+    "build:devtool": "vp build --config vite.devtool.config.ts",
     "dev": "vp pack --watch",
     "test": "vp test --run",
     "check": "vp check",
-    "prepublishOnly": "vp check && vp test --run && vp pack --publint --attw"
+    "prepack": "vp pack --publint --attw && pnpm run build:devtool",
+    "prepublishOnly": "vp check && vp test --run"
   },
   "dependencies": {
     "@clack/prompts": "^1.7.0",
+    "devframe": "^1.0.0",
     "mri": "^1.2.0",
     "picocolors": "^1.1.1"
   },

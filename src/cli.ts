@@ -9,6 +9,7 @@ import {
   type AgentInstructionsAction,
 } from "./agent-instructions.js";
 import { copyTextToClipboard } from "./clipboard.js";
+import { startCompulsiveDevtool } from "./devtool.js";
 import { CompulsiveError, type CompulsiveErrorCode } from "./errors.js";
 import { runGit } from "./git.js";
 import { createRepositoryManager } from "./manager.js";
@@ -44,6 +45,7 @@ const booleanFlags = [
   "help",
   "color",
   "all",
+  "open",
   "worktree",
   "create-branch",
 ];
@@ -80,6 +82,10 @@ export interface CliContext {
   confirm(message: string): Promise<boolean | undefined>;
   runTask<T>(message: string, task: () => Promise<T>): Promise<T>;
   installAgentInstructions(): Promise<AgentInstructionsAction>;
+  startDevtool(
+    manager: RepositoryManager,
+    options?: { openBrowser?: boolean },
+  ): Promise<{ origin: string }>;
 }
 
 function createDefaultContext(): CliContext {
@@ -101,6 +107,15 @@ function createDefaultContext(): CliContext {
     confirm: confirmAction,
     runTask: withSpinner,
     installAgentInstructions: installGlobalAgentInstructions,
+    startDevtool: async (manager, options) => {
+      const server = await startCompulsiveDevtool(manager, options);
+      const close = () => {
+        void server.close().finally(() => process.exit(0));
+      };
+      process.once("SIGINT", close);
+      process.once("SIGTERM", close);
+      return server;
+    },
   };
 }
 
@@ -125,6 +140,7 @@ function parseArguments(argv: string[]): ParsedArguments {
   const flags = new Set(booleanFlags.filter((name) => result[name] === true && name !== "color"));
   if (result.color === true) flags.add("color");
   if (result.color === false) flags.add("no-color");
+  if (result.open === false) flags.add("no-open");
   const values = new Map<string, string>();
   for (const name of valueFlags) {
     const value: unknown = result[name];
@@ -622,22 +638,12 @@ async function handleWorkspace(
     const repository = await selectOne(context.manager, repositoryQuery, context, allowPrompt);
     const alias = parsed.values.get("alias") ?? repository.name;
     const explicitBranch = parsed.values.get("branch");
-    const readableBranch = `workspace/${workspace.name}/${alias}`;
-    const validReadableBranch = await runGit(["check-ref-format", "--branch", readableBranch], {
-      cwd: repository.absolutePath,
-      allowFailure: true,
-    });
-    const branch =
-      explicitBranch ??
-      (validReadableBranch.exitCode === 0
-        ? readableBranch
-        : `workspace/${workspace.id.split(":").at(-1)!}/${repository.id.split(":").at(-1)!}`);
     const updated = await context.manager.addWorkspaceMember({
       workspaceId: workspace.id,
       repositoryId: repository.id,
       mode: "worktree",
-      branch,
-      createBranch: explicitBranch === undefined || parsed.flags.has("create-branch"),
+      ...(explicitBranch === undefined ? {} : { branch: explicitBranch }),
+      createBranch: parsed.flags.has("create-branch"),
       alias,
     });
     printValue(context, json ? updated : describeWorkspace(updated, context), json);
@@ -783,6 +789,14 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
         json ? config : context.theme.success("Initialized", config.rootDir),
         json,
       );
+      return;
+    }
+    case "ui": {
+      await context.manager.getConfig();
+      const server = await context.startDevtool(context.manager, {
+        openBrowser: !parsed.flags.has("no-open"),
+      });
+      context.stdout(context.theme.success("DevTool ready", server.origin));
       return;
     }
     case "clone": {
