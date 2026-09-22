@@ -29,15 +29,19 @@ export async function fileExists(path: string): Promise<boolean> {
   }
 }
 
-export async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
+export async function writeTextAtomic(path: string, content: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    await writeFile(temporaryPath, `${JSON.stringify(value, undefined, 2)}\n`, { mode: 0o600 });
+    await writeFile(temporaryPath, content, { mode: 0o600 });
     await rename(temporaryPath, path);
   } catch (error) {
     throw new CompulsiveError("FILESYSTEM_FAILED", `Unable to write ${path}.`, { cause: error });
   }
+}
+
+export async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
+  await writeTextAtomic(path, `${JSON.stringify(value, undefined, 2)}\n`);
 }
 
 async function readJson(path: string): Promise<unknown> {

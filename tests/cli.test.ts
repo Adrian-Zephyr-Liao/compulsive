@@ -1,11 +1,21 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { agentInstructions, installGlobalAgentInstructions } from "../src/agent-instructions.js";
 import { runCli } from "../src/cli.js";
 import { createRepositoryManager } from "../src/manager.js";
 
@@ -33,6 +43,7 @@ describe("cpl CLI", () => {
     const stdout: string[] = [];
     const stderr: string[] = [];
     const copied: string[] = [];
+    const agentsFile = join(sandbox, ".codex", "AGENTS.md");
     const context = {
       manager,
       stdout: (value: string) => stdout.push(value),
@@ -41,9 +52,11 @@ describe("cpl CLI", () => {
         copied.push(value);
       },
       isTTY: false,
+      installAgentInstructions: () => installGlobalAgentInstructions(agentsFile),
     };
 
     expect(await runCli(["init", "--root", rootDir], context)).toBe(0);
+    await expect(readFile(agentsFile, "utf8")).resolves.toBe(`${agentInstructions}\n`);
     expect(await runCli(["add", repositoryPath], context)).toBe(0);
     stdout.length = 0;
     expect(await runCli(["list", "--json"], context)).toBe(0);
@@ -470,6 +483,7 @@ describe("cpl CLI", () => {
       stderr: (value: string) => errors.push(value),
       copyText: async () => undefined,
       isTTY: false,
+      installAgentInstructions: async () => "unchanged" as const,
     };
 
     expect(await runCli(["--no-color", "init", "--root", rootDir], context)).toBe(0);
@@ -489,6 +503,7 @@ describe("cpl CLI", () => {
       stdout: (value: string) => output.push(value),
       stderr: (value: string) => errors.push(value),
       isTTY: false,
+      installAgentInstructions: async () => "unchanged" as const,
     };
 
     expect(await runCli(["--config", "compulsive.config.ts", "init"], context)).toBe(2);
@@ -501,5 +516,27 @@ describe("cpl CLI", () => {
     output.length = 0;
     expect(await runCli(["config", "show", "--json"], context)).toBe(0);
     expect(JSON.parse(output.join("\n"))).toMatchObject({ rootDir });
+  });
+
+  it("updates only the marked global agent instructions", async () => {
+    const file = join(sandbox, "AGENTS.md");
+    const unmarkedFile = join(sandbox, "unmarked", "AGENTS.md");
+    await mkdir(join(sandbox, "unmarked"));
+    await writeFile(unmarkedFile, "# Existing\n");
+    expect(await installGlobalAgentInstructions(unmarkedFile)).toBe("updated");
+    await expect(readFile(unmarkedFile, "utf8")).resolves.toBe(
+      `# Existing\n\n${agentInstructions}\n`,
+    );
+
+    await writeFile(
+      file,
+      `# Personal\n\n<!-- COMPULSIVE_START -->\nold\n<!-- COMPULSIVE_END -->\n\n## Keep\n`,
+    );
+
+    expect(await installGlobalAgentInstructions(file)).toBe("updated");
+    const updated = await readFile(file, "utf8");
+    expect(updated).toBe(`# Personal\n\n${agentInstructions}\n\n## Keep\n`);
+    expect(await installGlobalAgentInstructions(file)).toBe("unchanged");
+    await expect(readFile(file, "utf8")).resolves.toBe(updated);
   });
 });

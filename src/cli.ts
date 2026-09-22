@@ -4,6 +4,10 @@ import { isAbsolute, join, resolve } from "node:path";
 
 import mri from "mri";
 
+import {
+  installGlobalAgentInstructions,
+  type AgentInstructionsAction,
+} from "./agent-instructions.js";
 import { copyTextToClipboard } from "./clipboard.js";
 import { CompulsiveError, type CompulsiveErrorCode } from "./errors.js";
 import { runGit } from "./git.js";
@@ -75,6 +79,7 @@ export interface CliContext {
   ): Promise<NavigationTarget | undefined>;
   confirm(message: string): Promise<boolean | undefined>;
   runTask<T>(message: string, task: () => Promise<T>): Promise<T>;
+  installAgentInstructions(): Promise<AgentInstructionsAction>;
 }
 
 function createDefaultContext(): CliContext {
@@ -95,6 +100,7 @@ function createDefaultContext(): CliContext {
     chooseDestination: selectNavigationTarget,
     confirm: confirmAction,
     runTask: withSpinner,
+    installAgentInstructions: installGlobalAgentInstructions,
   };
 }
 
@@ -771,6 +777,7 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
     case "init": {
       const rootDir = parsed.values.get("root");
       const config = await context.manager.initialize(rootDir === undefined ? {} : { rootDir });
+      await context.installAgentInstructions();
       printValue(
         context,
         json ? config : context.theme.success("Initialized", config.rootDir),

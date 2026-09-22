@@ -29,6 +29,9 @@ npm install --global @adrian-zephyr/compulsive
 cpl init
 ```
 
+初始化还会向 `~/.codex/AGENTS.md` 写入一段带标记的 CPL 工作流说明。标记外的已有内容会原样
+保留；重复执行 `cpl init` 会安全刷新这段说明。
+
 首次初始化时可以指定管理根目录：
 
 ```bash

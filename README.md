@@ -30,6 +30,9 @@ npm install --global @adrian-zephyr/compulsive
 cpl init
 ```
 
+Initialization also installs a marker-delimited CPL workflow section in `~/.codex/AGENTS.md`.
+Existing content outside that section is preserved, and rerunning `cpl init` refreshes it safely.
+
 Use a custom managed root during first initialization:
 
 ```bash
