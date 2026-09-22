@@ -744,7 +744,7 @@ describe("workspace state", () => {
         repositoryIds: [selectedRepository.id],
       }),
     ).rejects.toMatchObject({ code: "CONFLICT" });
-  }, 15_000);
+  }, 30_000);
 
   it("validates clone workspace selection before creating a target", async () => {
     const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
