@@ -12,14 +12,18 @@ import {
   fileExists,
   readConfig,
   readRegistry,
+  readWorkspaceStatusRegistry,
   writeJsonAtomic,
 } from "./storage.js";
 import type {
   AddWorkspaceMemberInput,
+  CloneWorkspaceInput,
+  ConvertWorkspaceToReferenceInput,
   CreateWorkspaceInput,
   ManagerConfig,
   DiscoveryResult,
   OrganizePlan,
+  PromoteWorkspaceReferenceInput,
   RepositoryManager,
   RepositoryManagerOptions,
   RepositoryRecord,
@@ -27,12 +31,19 @@ import type {
   RemoveWorkspaceMemberInput,
   SearchWorkspacesInput,
   WorkspaceId,
+  WorkspaceGitActionInput,
 } from "./types.js";
 import {
   addWorkspaceMember,
+  cloneWorkspace,
+  convertWorkspaceToReference,
   createWorkspace,
   deleteWorkspace,
+  getWorkspaceStatus,
   migrateWorkspaces,
+  promoteWorkspaceReference,
+  pushWorkspaceMember,
+  rebaseWorkspaceMember,
   removeWorkspaceMember,
   searchWorkspaces,
   syncWorkspace,
@@ -199,6 +210,9 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
       if (!(await fileExists(paths.workspaces))) {
         await writeJsonAtomic(paths.workspaces, { schemaVersion: 1, workspaces: [] });
       }
+      if (!(await fileExists(paths.workspaceStatuses))) {
+        await writeJsonAtomic(paths.workspaceStatuses, { schemaVersion: 1, statuses: [] });
+      }
       return existing;
     }
 
@@ -215,6 +229,7 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
     await writeJsonAtomic(paths.config, config);
     await writeJsonAtomic(paths.registry, registry);
     await writeJsonAtomic(paths.workspaces, { schemaVersion: 1, workspaces: [] });
+    await writeJsonAtomic(paths.workspaceStatuses, { schemaVersion: 1, statuses: [] });
     return config;
   }
 
@@ -542,10 +557,21 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
     organize,
     forget,
     createWorkspace: (input: CreateWorkspaceInput) => createWorkspace(paths, input),
+    cloneWorkspace: (input: CloneWorkspaceInput) => cloneWorkspace(paths, input),
     searchWorkspaces: (input?: SearchWorkspacesInput) => searchWorkspaces(paths, input),
     addWorkspaceMember: (input: AddWorkspaceMemberInput) => addWorkspaceMember(paths, input),
     removeWorkspaceMember: (input: RemoveWorkspaceMemberInput) =>
       removeWorkspaceMember(paths, input),
+    promoteWorkspaceReference: (input: PromoteWorkspaceReferenceInput) =>
+      promoteWorkspaceReference(paths, input),
+    convertWorkspaceToReference: (input: ConvertWorkspaceToReferenceInput) =>
+      convertWorkspaceToReference(paths, input),
+    rebaseWorkspaceMember: (input: WorkspaceGitActionInput) => rebaseWorkspaceMember(paths, input),
+    pushWorkspaceMember: (input: WorkspaceGitActionInput) => pushWorkspaceMember(paths, input),
+    getWorkspaceStatus: (id: WorkspaceId, fetchRemote = false) =>
+      getWorkspaceStatus(paths, id, fetchRemote),
+    getWorkspaceStatuses: async () =>
+      (await readWorkspaceStatusRegistry(paths.workspaceStatuses)).statuses,
     syncWorkspace: (id: WorkspaceId) => syncWorkspace(paths, id),
     migrateWorkspaces: (ids?: WorkspaceId[]) => migrateWorkspaces(paths, ids),
     deleteWorkspace: (id: WorkspaceId) => deleteWorkspace(paths, id),

@@ -31,6 +31,7 @@ export type WorkspaceMember =
       mode: "worktree";
       branch: string;
       worktreePath: string;
+      detached?: true;
     };
 
 export interface WorkspaceRecord {
@@ -126,15 +127,73 @@ export interface SearchWorkspacesInput {
   query?: string;
 }
 
+export interface CloneWorkspaceInput {
+  sourceWorkspaceId: WorkspaceId;
+  name: string;
+  repositoryIds: RepositoryId[];
+  branchName?: string;
+  referenceRepositoryIds?: RepositoryId[];
+}
+
 export type AddWorkspaceMemberInput = {
   workspaceId: WorkspaceId;
   repositoryId: RepositoryId;
   alias?: string;
-} & ({ mode?: "link" } | { mode: "worktree"; branch?: string; createBranch?: boolean });
+} & (
+  | { mode?: "link" }
+  | {
+      mode: "worktree";
+      branch?: string;
+      createBranch?: boolean;
+      startPoint?: string;
+      detached?: boolean;
+    }
+);
 
 export interface RemoveWorkspaceMemberInput {
   workspaceId: WorkspaceId;
   repositoryId: RepositoryId;
+}
+
+export interface PromoteWorkspaceReferenceInput {
+  workspaceId: WorkspaceId;
+  repositoryId: RepositoryId;
+  branch: string;
+}
+
+export interface ConvertWorkspaceToReferenceInput {
+  workspaceId: WorkspaceId;
+  repositoryId: RepositoryId;
+}
+
+export interface WorkspaceGitActionInput {
+  workspaceId: WorkspaceId;
+  repositoryId: RepositoryId;
+}
+
+export interface WorkspaceMemberStatus {
+  repositoryId: RepositoryId;
+  branch: string;
+  detached: boolean;
+  defaultBranch?: string;
+  ahead?: number;
+  behind?: number;
+  upstream?: string;
+  unpushed?: number;
+  changes: string[];
+  conflicts: string[];
+  comparisonError?: string;
+}
+
+export interface WorkspaceStatusResult {
+  workspaceId: WorkspaceId;
+  checkedAt: string;
+  members: WorkspaceMemberStatus[];
+}
+
+export interface WorkspaceStatusRegistry {
+  schemaVersion: 1;
+  statuses: WorkspaceStatusResult[];
 }
 
 export interface WorkspaceSyncIssue {
@@ -172,9 +231,16 @@ export interface RepositoryManager {
   organize(plan: OrganizePlan): Promise<RepositoryRecord>;
   forget(id: RepositoryId): Promise<void>;
   createWorkspace(input: CreateWorkspaceInput): Promise<WorkspaceRecord>;
+  cloneWorkspace(input: CloneWorkspaceInput): Promise<WorkspaceRecord>;
   searchWorkspaces(input?: SearchWorkspacesInput): Promise<WorkspaceRecord[]>;
   addWorkspaceMember(input: AddWorkspaceMemberInput): Promise<WorkspaceRecord>;
   removeWorkspaceMember(input: RemoveWorkspaceMemberInput): Promise<WorkspaceRecord>;
+  promoteWorkspaceReference(input: PromoteWorkspaceReferenceInput): Promise<WorkspaceRecord>;
+  convertWorkspaceToReference(input: ConvertWorkspaceToReferenceInput): Promise<WorkspaceRecord>;
+  rebaseWorkspaceMember(input: WorkspaceGitActionInput): Promise<void>;
+  pushWorkspaceMember(input: WorkspaceGitActionInput): Promise<void>;
+  getWorkspaceStatus(id: WorkspaceId, fetchRemote?: boolean): Promise<WorkspaceStatusResult>;
+  getWorkspaceStatuses(): Promise<WorkspaceStatusResult[]>;
   syncWorkspace(id: WorkspaceId): Promise<WorkspaceSyncResult>;
   migrateWorkspaces(ids?: WorkspaceId[]): Promise<WorkspaceMigrationResult>;
   deleteWorkspace(id: WorkspaceId): Promise<void>;

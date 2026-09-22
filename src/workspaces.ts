@@ -23,19 +23,26 @@ import {
   readConfig,
   readRegistry,
   readWorkspaceRegistry,
+  readWorkspaceStatusRegistry,
   writeJsonAtomic,
   type StoragePaths,
 } from "./storage.js";
 import type {
   AddWorkspaceMemberInput,
+  CloneWorkspaceInput,
+  ConvertWorkspaceToReferenceInput,
   CreateWorkspaceInput,
+  PromoteWorkspaceReferenceInput,
   RemoveWorkspaceMemberInput,
   RepositoryRecord,
   SearchWorkspacesInput,
   WorkspaceId,
+  WorkspaceGitActionInput,
   WorkspaceMember,
   WorkspaceMigrationResult,
+  WorkspaceMemberStatus,
   WorkspaceRecord,
+  WorkspaceStatusResult,
   WorkspaceSyncIssue,
   WorkspaceSyncResult,
 } from "./types.js";
@@ -310,6 +317,7 @@ async function verifyManagedWorktree(
   worktreePath: string,
   repositoryPath: string,
   branch: string,
+  detached = false,
 ): Promise<void> {
   if (!(await pathEntryExists(worktreePath))) {
     throw new CompulsiveError("CONFLICT", `Managed Git worktree is missing: ${worktreePath}`);
@@ -331,7 +339,7 @@ async function verifyManagedWorktree(
     if (
       (await realpath(memberRoot.stdout)) !== (await realpath(worktreePath)) ||
       memberCommon !== repositoryCommon ||
-      currentBranch.stdout !== branch
+      currentBranch.stdout !== (detached ? "" : branch)
     ) {
       throw new CompulsiveError(
         "CONFLICT",
@@ -367,7 +375,7 @@ async function verifyWorkspaceWorktree(
     }
     await verifyExpectedLink(memberPath, member.worktreePath);
   }
-  await verifyManagedWorktree(member.worktreePath, repositoryPath, member.branch);
+  await verifyManagedWorktree(member.worktreePath, repositoryPath, member.branch, member.detached);
   return { memberPath, worktreePath: member.worktreePath, linked };
 }
 
@@ -384,10 +392,16 @@ async function addGitWorktree(
   branch: string,
   createBranch: boolean,
   upstream?: string,
+  startPoint?: string,
+  detached = false,
 ): Promise<void> {
   const arguments_ = ["-C", repositoryPath, "worktree", "add"];
-  if (createBranch) arguments_.push("-b", branch, "--", worktreePath);
-  else arguments_.push("--", worktreePath, branch);
+  if (detached) {
+    arguments_.push("--detach", "--", worktreePath, startPoint ?? branch);
+  } else if (createBranch) {
+    arguments_.push("-b", branch, "--", worktreePath);
+    if (startPoint) arguments_.push(startPoint);
+  } else arguments_.push("--", worktreePath, branch);
   let added = false;
   try {
     await runGit(arguments_);
@@ -396,7 +410,15 @@ async function addGitWorktree(
       await runGit(["branch", "--set-upstream-to", upstream, branch], { cwd: worktreePath });
     }
   } catch (error) {
-    if (added) await removeGitWorktree(repositoryPath, worktreePath).catch(() => undefined);
+    if (added) {
+      await removeGitWorktree(repositoryPath, worktreePath).catch(() => undefined);
+      if (createBranch) {
+        await runGit(["branch", "-D", "--", branch], {
+          cwd: repositoryPath,
+          allowFailure: true,
+        });
+      }
+    }
     if (error instanceof CompulsiveError && error.code === "GIT_FAILED") {
       throw new CompulsiveError("CONFLICT", error.message, error.details);
     }
@@ -516,6 +538,65 @@ async function currentUpstream(repositoryPath: string): Promise<string | undefin
   return result.exitCode === 0 && result.stdout ? result.stdout : undefined;
 }
 
+async function cachedOriginDefaultBranch(repositoryPath: string): Promise<string | undefined> {
+  const symbolic = await runGit(
+    ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+    { cwd: repositoryPath, allowFailure: true },
+  );
+  if (symbolic.exitCode === 0 && symbolic.stdout) return symbolic.stdout;
+  for (const candidate of ["origin/main", "origin/master"]) {
+    const result = await runGit(["rev-parse", "--verify", `${candidate}^{commit}`], {
+      cwd: repositoryPath,
+      allowFailure: true,
+    });
+    if (result.exitCode === 0) return candidate;
+  }
+  return undefined;
+}
+
+async function fetchOriginDefaultBranch(repositoryPath: string): Promise<string> {
+  const remoteHead = await runGit(["ls-remote", "--symref", "origin", "HEAD"], {
+    cwd: repositoryPath,
+    allowFailure: true,
+  });
+  const defaultRef = remoteHead.stdout
+    .split("\n")
+    .find((line) => line.startsWith("ref: refs/heads/") && line.endsWith("\tHEAD"))
+    ?.slice("ref: ".length, -"\tHEAD".length);
+  if (remoteHead.exitCode !== 0 || !defaultRef) {
+    throw new CompulsiveError("CONFLICT", "Unable to resolve the default branch for origin.");
+  }
+  const remoteBranch = `origin/${defaultRef.slice("refs/heads/".length)}`;
+  await runGit(["fetch", "origin", `+${defaultRef}:refs/remotes/${remoteBranch}`], {
+    cwd: repositoryPath,
+  });
+  return remoteBranch;
+}
+
+async function originBranch(
+  repositoryPath: string,
+  branch: string,
+  fetchRemote: boolean,
+): Promise<string | undefined> {
+  const remoteBranch = `origin/${branch}`;
+  if (!fetchRemote) {
+    const cached = await runGit(["rev-parse", "--verify", `${remoteBranch}^{commit}`], {
+      cwd: repositoryPath,
+      allowFailure: true,
+    });
+    return cached.exitCode === 0 ? remoteBranch : undefined;
+  }
+  const remoteRef = `refs/heads/${branch}`;
+  const remote = await runGit(["ls-remote", "--heads", "origin", remoteRef], {
+    cwd: repositoryPath,
+  });
+  if (!remote.stdout) return undefined;
+  await runGit(["fetch", "origin", `+${remoteRef}:refs/remotes/${remoteBranch}`], {
+    cwd: repositoryPath,
+  });
+  return remoteBranch;
+}
+
 export async function addWorkspaceMember(
   paths: StoragePaths,
   input: AddWorkspaceMemberInput,
@@ -541,10 +622,22 @@ export async function addWorkspaceMember(
   }
 
   let member: WorkspaceMember;
+  let createdBranch: string | undefined;
   if (input.mode === "worktree") {
     const explicitBranch = input.branch?.trim();
     if (input.branch !== undefined && !explicitBranch) {
       throw new CompulsiveError("INVALID_INPUT", "Worktree branch is required.");
+    }
+    const startPoint = input.startPoint?.trim();
+    if (input.startPoint !== undefined && !startPoint) {
+      throw new CompulsiveError("INVALID_INPUT", "Worktree start point is required.");
+    }
+    const detached = input.detached === true;
+    if (detached && !startPoint) {
+      throw new CompulsiveError("INVALID_INPUT", "Detached worktree start point is required.");
+    }
+    if (detached && explicitBranch) {
+      throw new CompulsiveError("INVALID_INPUT", "Detached worktree cannot use a local branch.");
     }
     const readableBranch = `workspace/${workspace.name}/${alias}`;
     const validReadableBranch = explicitBranch
@@ -553,11 +646,12 @@ export async function addWorkspaceMember(
           cwd: repository.absolutePath,
           allowFailure: true,
         });
-    const branch =
-      explicitBranch ??
-      (validReadableBranch?.exitCode === 0
-        ? readableBranch
-        : `workspace/${workspace.id.split(":").at(-1)!}/${repository.id.split(":").at(-1)!}`);
+    const branch = detached
+      ? startPoint!
+      : (explicitBranch ??
+        (validReadableBranch?.exitCode === 0
+          ? readableBranch
+          : `workspace/${workspace.id.split(":").at(-1)!}/${repository.id.split(":").at(-1)!}`));
     const worktreePath = managedWorktreePath(repository.absolutePath, workspace);
     if (await pathEntryExists(worktreePath)) {
       throw new CompulsiveError(
@@ -566,15 +660,32 @@ export async function addWorkspaceMember(
       );
     }
     await ensureManagedWorktreeRoot(repository.absolutePath);
-    const createBranch = explicitBranch === undefined || input.createBranch === true;
-    const upstream = createBranch ? await currentUpstream(repository.absolutePath) : undefined;
-    await addGitWorktree(repository.absolutePath, worktreePath, branch, createBranch, upstream);
+    const createBranch = !detached && (explicitBranch === undefined || input.createBranch === true);
+    if (createBranch) createdBranch = branch;
+    const upstream = createBranch
+      ? (startPoint ?? (await currentUpstream(repository.absolutePath)))
+      : undefined;
+    await addGitWorktree(
+      repository.absolutePath,
+      worktreePath,
+      branch,
+      createBranch,
+      upstream,
+      startPoint,
+      detached,
+    );
     try {
-      await verifyManagedWorktree(worktreePath, repository.absolutePath, branch);
+      await verifyManagedWorktree(worktreePath, repository.absolutePath, branch, detached);
       await createVerifiedLink(memberPath, worktreePath);
     } catch (error) {
       await unlinkExpectedLink(memberPath, await realpath(worktreePath)).catch(() => undefined);
       await removeGitWorktree(repository.absolutePath, worktreePath).catch(() => undefined);
+      if (createBranch) {
+        await runGit(["branch", "-D", "--", branch], {
+          cwd: repository.absolutePath,
+          allowFailure: true,
+        });
+      }
       throw error;
     }
     member = {
@@ -583,6 +694,7 @@ export async function addWorkspaceMember(
       mode: "worktree",
       branch,
       worktreePath: await realpath(worktreePath),
+      ...(detached ? { detached: true as const } : {}),
     };
   } else {
     await createVerifiedLink(memberPath, repository.absolutePath);
@@ -602,6 +714,12 @@ export async function addWorkspaceMember(
         await unlinkExpectedLink(memberPath, member.worktreePath);
         await assertCleanWorktree(member.worktreePath);
         await removeGitWorktree(repository.absolutePath, member.worktreePath);
+        if (createdBranch) {
+          await runGit(["branch", "-D", "--", createdBranch], {
+            cwd: repository.absolutePath,
+            allowFailure: true,
+          });
+        }
       } else {
         await unlinkExpectedLink(memberPath, await realpath(repository.absolutePath));
       }
@@ -615,6 +733,160 @@ export async function addWorkspaceMember(
     throw error;
   }
   return updated;
+}
+
+export async function cloneWorkspace(
+  paths: StoragePaths,
+  input: CloneWorkspaceInput,
+): Promise<WorkspaceRecord> {
+  const name = input.name.trim();
+  assertSafeWorkspaceSegment(name, "Workspace name");
+  if (input.repositoryIds.length === 0) {
+    throw new CompulsiveError("INVALID_INPUT", "Select at least one repository to clone.");
+  }
+  if (new Set(input.repositoryIds).size !== input.repositoryIds.length) {
+    throw new CompulsiveError("INVALID_INPUT", "Repository selection contains duplicates.");
+  }
+  const referenceRepositoryIds = input.referenceRepositoryIds ?? [];
+  if (new Set(referenceRepositoryIds).size !== referenceRepositoryIds.length) {
+    throw new CompulsiveError(
+      "INVALID_INPUT",
+      "Reference repository selection contains duplicates.",
+    );
+  }
+  const selectedIds = new Set(input.repositoryIds);
+  if (referenceRepositoryIds.some((repositoryId) => !selectedIds.has(repositoryId))) {
+    throw new CompulsiveError(
+      "INVALID_INPUT",
+      "Every reference repository must be selected for cloning.",
+    );
+  }
+  const branchName = input.branchName?.trim();
+  if (input.branchName !== undefined && !branchName) {
+    throw new CompulsiveError("INVALID_INPUT", "Clone branch name is required.");
+  }
+  const referenceIds = new Set(referenceRepositoryIds);
+
+  const [config, workspaceRegistry, repositoryRegistry] = await Promise.all([
+    readConfig(paths.config),
+    readWorkspaceRegistry(paths.workspaces),
+    readRegistry(paths.registry),
+  ]);
+  const { workspace: source } = findWorkspace(workspaceRegistry, input.sourceWorkspaceId);
+  const targetPath = resolve(join(config.workspaceRoot, name));
+  if (
+    workspaceRegistry.workspaces.some(
+      (workspace) => workspace.name.toLowerCase() === name.toLowerCase(),
+    )
+  ) {
+    throw new CompulsiveError("CONFLICT", `Workspace name already exists: ${name}`);
+  }
+  if (
+    workspaceRegistry.workspaces.some((workspace) => resolve(workspace.absolutePath) === targetPath)
+  ) {
+    throw new CompulsiveError("CONFLICT", `Workspace path is already registered: ${targetPath}`);
+  }
+  if (await fileExists(targetPath)) {
+    throw new CompulsiveError("CONFLICT", `Workspace path already exists: ${targetPath}`);
+  }
+
+  const selected = input.repositoryIds.map((repositoryId) => {
+    const member = source.members.find((candidate) => candidate.repositoryId === repositoryId);
+    if (!member) {
+      throw new CompulsiveError(
+        "INVALID_INPUT",
+        "Every selected repository must belong to the source Workspace.",
+      );
+    }
+    return {
+      member,
+      repository: findRepository(repositoryRegistry.repositories, repositoryId),
+      startPoint: "",
+      reference: referenceIds.has(repositoryId),
+    };
+  });
+
+  if (branchName) {
+    const developmentRepository = selected.find((candidate) => !candidate.reference)?.repository;
+    if (developmentRepository) {
+      const validBranch = await runGit(["check-ref-format", "--branch", branchName], {
+        cwd: developmentRepository.absolutePath,
+        allowFailure: true,
+      });
+      if (validBranch.exitCode !== 0) {
+        throw new CompulsiveError("INVALID_INPUT", `Invalid clone branch name: ${branchName}`);
+      }
+    }
+  }
+
+  for (const selectedRepository of selected) {
+    const { repository } = selectedRepository;
+    const origin = await runGit(["config", "--get", "remote.origin.url"], {
+      cwd: repository.absolutePath,
+      allowFailure: true,
+    });
+    if (origin.exitCode !== 0 || !origin.stdout) {
+      throw new CompulsiveError("CONFLICT", `Repository has no origin remote: ${repository.name}`);
+    }
+    const remoteBranch = await fetchOriginDefaultBranch(repository.absolutePath).catch((error) => {
+      throw new CompulsiveError(
+        "CONFLICT",
+        `Unable to resolve the default branch for origin: ${repository.name}`,
+        { cause: error },
+      );
+    });
+    const commit = await runGit(["rev-parse", "--verify", `${remoteBranch}^{commit}`], {
+      cwd: repository.absolutePath,
+      allowFailure: true,
+    });
+    if (commit.exitCode !== 0 || !commit.stdout) {
+      throw new CompulsiveError(
+        "CONFLICT",
+        `Remote default branch ${remoteBranch} is unavailable: ${repository.name}`,
+      );
+    }
+    selectedRepository.startPoint = remoteBranch;
+  }
+
+  const target = await createWorkspace(paths, { name });
+  const createdBranches: Array<{ repositoryPath: string; branch: string }> = [];
+  try {
+    let current = target;
+    for (const { member, repository, startPoint, reference } of selected) {
+      current = await addWorkspaceMember(paths, {
+        workspaceId: target.id,
+        repositoryId: repository.id,
+        alias: member.alias,
+        mode: "worktree",
+        ...(reference
+          ? { detached: true }
+          : { ...(branchName ? { branch: branchName } : {}), createBranch: true }),
+        startPoint,
+      });
+      const created = current.members.at(-1);
+      if (created?.mode === "worktree" && !created.detached) {
+        createdBranches.push({ repositoryPath: repository.absolutePath, branch: created.branch });
+      }
+    }
+    return current;
+  } catch (error) {
+    try {
+      await deleteWorkspace(paths, target.id);
+      for (const created of createdBranches) {
+        await runGit(["branch", "-D", "--", created.branch], {
+          cwd: created.repositoryPath,
+          allowFailure: true,
+        });
+      }
+    } catch (rollbackError) {
+      throw new CompulsiveError(
+        "FILESYSTEM_FAILED",
+        "Workspace clone failed and the partial target could not be fully removed.",
+        { cause: error, rollbackError },
+      );
+    }
+    throw error;
+  }
 }
 
 export async function removeWorkspaceMember(
@@ -666,7 +938,15 @@ export async function removeWorkspaceMember(
   } catch (error) {
     try {
       if (member.mode === "worktree") {
-        await addGitWorktree(repository.absolutePath, member.worktreePath, member.branch, false);
+        await addGitWorktree(
+          repository.absolutePath,
+          member.worktreePath,
+          member.branch,
+          false,
+          undefined,
+          member.branch,
+          member.detached,
+        );
         if (worktreeState?.linked) {
           await createVerifiedLink(worktreeState.memberPath, member.worktreePath);
         }
@@ -683,6 +963,293 @@ export async function removeWorkspaceMember(
     throw error;
   }
   return updated;
+}
+
+export async function promoteWorkspaceReference(
+  paths: StoragePaths,
+  input: PromoteWorkspaceReferenceInput,
+): Promise<WorkspaceRecord> {
+  const branch = input.branch.trim();
+  if (!branch) throw new CompulsiveError("INVALID_INPUT", "Development branch is required.");
+  const [workspaceRegistry, repositoryRegistry] = await Promise.all([
+    readWorkspaceRegistry(paths.workspaces),
+    readRegistry(paths.registry),
+  ]);
+  const { index, workspace } = findWorkspace(workspaceRegistry, input.workspaceId);
+  const memberIndex = workspace.members.findIndex(
+    (member) => member.repositoryId === input.repositoryId,
+  );
+  if (memberIndex === -1) {
+    throw new CompulsiveError("NOT_FOUND", "Repository is not a member of this workspace.");
+  }
+  const member = workspace.members[memberIndex]!;
+  if (member.mode !== "worktree" || !member.detached) {
+    throw new CompulsiveError("CONFLICT", "Workspace member is not a reference worktree.");
+  }
+  const repository = findRepository(repositoryRegistry.repositories, member.repositoryId);
+  await verifyWorkspaceWorktree(workspace, member, repository.absolutePath);
+  const validBranch = await runGit(["check-ref-format", "--branch", branch], {
+    cwd: repository.absolutePath,
+    allowFailure: true,
+  });
+  if (validBranch.exitCode !== 0) {
+    throw new CompulsiveError("INVALID_INPUT", `Invalid development branch: ${branch}`);
+  }
+  const existingBranch = await runGit(["show-ref", "--verify", `refs/heads/${branch}`], {
+    cwd: repository.absolutePath,
+    allowFailure: true,
+  });
+  const createdBranch = existingBranch.exitCode !== 0;
+  const originalCommit = (await runGit(["rev-parse", "HEAD"], { cwd: member.worktreePath })).stdout;
+  const rollback = async () => {
+    await runGit(["switch", "--detach", originalCommit], { cwd: member.worktreePath });
+    if (createdBranch) {
+      await runGit(["branch", "-D", "--", branch], { cwd: repository.absolutePath });
+    }
+  };
+  try {
+    await runGit(
+      createdBranch ? ["switch", "-c", branch] : ["switch", "--ignore-other-worktrees", branch],
+      { cwd: member.worktreePath },
+    );
+    const upstream = await runGit(["rev-parse", "--verify", `${member.branch}^{commit}`], {
+      cwd: repository.absolutePath,
+      allowFailure: true,
+    });
+    if (upstream.exitCode === 0) {
+      await runGit(["branch", "--set-upstream-to", member.branch, branch], {
+        cwd: member.worktreePath,
+      });
+    }
+    await verifyManagedWorktree(member.worktreePath, repository.absolutePath, branch);
+  } catch (error) {
+    await rollback().catch(() => undefined);
+    throw error;
+  }
+
+  const updatedMember: WorkspaceMember = {
+    repositoryId: member.repositoryId,
+    alias: member.alias,
+    mode: "worktree",
+    branch,
+    worktreePath: member.worktreePath,
+  };
+  const updated: WorkspaceRecord = {
+    ...workspace,
+    members: workspace.members.map((candidate, candidateIndex) =>
+      candidateIndex === memberIndex ? updatedMember : candidate,
+    ),
+    updatedAt: new Date().toISOString(),
+  };
+  workspaceRegistry.workspaces[index] = updated;
+  try {
+    await writeJsonAtomic(paths.workspaces, workspaceRegistry);
+  } catch (error) {
+    try {
+      await rollback();
+    } catch (rollbackError) {
+      throw new CompulsiveError(
+        "FILESYSTEM_FAILED",
+        "Workspace index update failed and the reference could not be restored.",
+        { cause: error, rollbackError },
+      );
+    }
+    throw error;
+  }
+  return updated;
+}
+
+export async function convertWorkspaceToReference(
+  paths: StoragePaths,
+  input: ConvertWorkspaceToReferenceInput,
+): Promise<WorkspaceRecord> {
+  const [workspaceRegistry, repositoryRegistry] = await Promise.all([
+    readWorkspaceRegistry(paths.workspaces),
+    readRegistry(paths.registry),
+  ]);
+  const { index, workspace } = findWorkspace(workspaceRegistry, input.workspaceId);
+  const memberIndex = workspace.members.findIndex(
+    (member) => member.repositoryId === input.repositoryId,
+  );
+  if (memberIndex === -1) {
+    throw new CompulsiveError("NOT_FOUND", "Repository is not a member of this workspace.");
+  }
+  const member = workspace.members[memberIndex]!;
+  if (member.mode !== "worktree" || member.detached) {
+    throw new CompulsiveError("CONFLICT", "Workspace member is not a development worktree.");
+  }
+  const repository = findRepository(repositoryRegistry.repositories, member.repositoryId);
+  const state = await verifyWorkspaceWorktree(workspace, member, repository.absolutePath);
+  await assertCleanWorktree(state.worktreePath);
+  const remoteBranch = await fetchOriginDefaultBranch(repository.absolutePath);
+  await runGit(["switch", "--detach", remoteBranch], { cwd: state.worktreePath });
+  try {
+    await verifyManagedWorktree(state.worktreePath, repository.absolutePath, remoteBranch, true);
+  } catch (error) {
+    await runGit(["switch", member.branch], { cwd: state.worktreePath }).catch(() => undefined);
+    throw error;
+  }
+
+  const referenceMember: WorkspaceMember = {
+    repositoryId: member.repositoryId,
+    alias: member.alias,
+    mode: "worktree",
+    branch: remoteBranch,
+    worktreePath: member.worktreePath,
+    detached: true,
+  };
+  const updated: WorkspaceRecord = {
+    ...workspace,
+    members: workspace.members.map((candidate, candidateIndex) =>
+      candidateIndex === memberIndex ? referenceMember : candidate,
+    ),
+    updatedAt: new Date().toISOString(),
+  };
+  workspaceRegistry.workspaces[index] = updated;
+  try {
+    await writeJsonAtomic(paths.workspaces, workspaceRegistry);
+  } catch (error) {
+    try {
+      await runGit(["switch", member.branch], { cwd: state.worktreePath });
+    } catch (rollbackError) {
+      throw new CompulsiveError(
+        "FILESYSTEM_FAILED",
+        "Workspace index update failed and the development branch could not be restored.",
+        { cause: error, rollbackError },
+      );
+    }
+    throw error;
+  }
+  return updated;
+}
+
+async function getDevelopmentWorktree(
+  paths: StoragePaths,
+  input: WorkspaceGitActionInput,
+): Promise<{
+  member: Extract<WorkspaceMember, { mode: "worktree" }>;
+  repository: RepositoryRecord;
+}> {
+  const [workspaceRegistry, repositoryRegistry] = await Promise.all([
+    readWorkspaceRegistry(paths.workspaces),
+    readRegistry(paths.registry),
+  ]);
+  const { workspace } = findWorkspace(workspaceRegistry, input.workspaceId);
+  const member = workspace.members.find(({ repositoryId }) => repositoryId === input.repositoryId);
+  if (!member)
+    throw new CompulsiveError("NOT_FOUND", "Repository is not a member of this workspace.");
+  if (member.mode !== "worktree" || member.detached) {
+    throw new CompulsiveError("CONFLICT", "Workspace member is not a development worktree.");
+  }
+  const repository = findRepository(repositoryRegistry.repositories, member.repositoryId);
+  await verifyWorkspaceWorktree(workspace, member, repository.absolutePath);
+  await assertCleanWorktree(member.worktreePath);
+  return { member, repository };
+}
+
+export async function rebaseWorkspaceMember(
+  paths: StoragePaths,
+  input: WorkspaceGitActionInput,
+): Promise<void> {
+  const { member, repository } = await getDevelopmentWorktree(paths, input);
+  const remoteBranch = await fetchOriginDefaultBranch(repository.absolutePath);
+  await runGit(["rebase", remoteBranch], { cwd: member.worktreePath });
+}
+
+export async function pushWorkspaceMember(
+  paths: StoragePaths,
+  input: WorkspaceGitActionInput,
+): Promise<void> {
+  const { member, repository } = await getDevelopmentWorktree(paths, input);
+  const remoteBranch = await originBranch(repository.absolutePath, member.branch, true);
+  if (remoteBranch) await runGit(["rebase", remoteBranch], { cwd: member.worktreePath });
+  await runGit(["push", "-u", "origin", `HEAD:refs/heads/${member.branch}`], {
+    cwd: member.worktreePath,
+  });
+}
+
+export async function getWorkspaceStatus(
+  paths: StoragePaths,
+  id: WorkspaceId,
+  fetchRemote = false,
+): Promise<WorkspaceStatusResult> {
+  const [workspaceRegistry, repositoryRegistry] = await Promise.all([
+    readWorkspaceRegistry(paths.workspaces),
+    readRegistry(paths.registry),
+  ]);
+  const { workspace } = findWorkspace(workspaceRegistry, id);
+  const members = await Promise.all(
+    workspace.members.map(async (member): Promise<WorkspaceMemberStatus> => {
+      const repository = findRepository(repositoryRegistry.repositories, member.repositoryId);
+      const path = member.mode === "worktree" ? member.worktreePath : repository.absolutePath;
+      try {
+        const [currentBranch, status, conflicts] = await Promise.all([
+          runGit(["branch", "--show-current"], { cwd: path }),
+          runGit(["status", "--porcelain=v1", "--untracked-files=all"], { cwd: path }),
+          runGit(["diff", "--name-only", "--diff-filter=U", "--"], { cwd: path }),
+        ]);
+        const defaultBranch = fetchRemote
+          ? await fetchOriginDefaultBranch(repository.absolutePath)
+          : await cachedOriginDefaultBranch(repository.absolutePath);
+        let ahead: number | undefined;
+        let behind: number | undefined;
+        const pushBranch =
+          member.mode === "worktree" && !member.detached
+            ? await originBranch(repository.absolutePath, member.branch, fetchRemote)
+            : undefined;
+        const upstream = pushBranch ?? (await currentUpstream(path));
+        let unpushed: number | undefined;
+        let comparisonError: string | undefined;
+        if (defaultBranch) {
+          const comparison = await runGit(
+            ["rev-list", "--left-right", "--count", `HEAD...${defaultBranch}`],
+            { cwd: path, allowFailure: true },
+          );
+          if (comparison.exitCode === 0) {
+            [ahead, behind] = comparison.stdout.split(/\s+/).map(Number);
+          } else
+            comparisonError = comparison.stderr || "Unable to compare with the default branch.";
+        } else comparisonError = "Origin default branch is unavailable.";
+        if (upstream) {
+          const pendingPush = await runGit(["rev-list", "--count", `${upstream}..HEAD`], {
+            cwd: path,
+            allowFailure: true,
+          });
+          if (pendingPush.exitCode === 0) unpushed = Number(pendingPush.stdout);
+        }
+        return {
+          repositoryId: member.repositoryId,
+          branch: currentBranch.stdout || (member.mode === "worktree" ? member.branch : "detached"),
+          detached: member.mode === "worktree" && member.detached === true,
+          ...(defaultBranch ? { defaultBranch } : {}),
+          ...(ahead === undefined ? {} : { ahead }),
+          ...(behind === undefined ? {} : { behind }),
+          ...(upstream ? { upstream } : {}),
+          ...(unpushed === undefined ? {} : { unpushed }),
+          changes: status.stdout ? status.stdout.split("\n") : [],
+          conflicts: conflicts.stdout ? conflicts.stdout.split("\n") : [],
+          ...(comparisonError ? { comparisonError } : {}),
+        };
+      } catch (error) {
+        return {
+          repositoryId: member.repositoryId,
+          branch: member.mode === "worktree" ? member.branch : "unknown",
+          detached: member.mode === "worktree" && member.detached === true,
+          changes: [],
+          conflicts: [],
+          comparisonError: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }),
+  );
+  const result = { workspaceId: workspace.id, checkedAt: new Date().toISOString(), members };
+  const statusRegistry = await readWorkspaceStatusRegistry(paths.workspaceStatuses);
+  statusRegistry.statuses = [
+    ...statusRegistry.statuses.filter(({ workspaceId }) => workspaceId !== workspace.id),
+    result,
+  ];
+  await writeJsonAtomic(paths.workspaceStatuses, statusRegistry);
+  return result;
 }
 
 export async function syncWorkspace(
@@ -714,7 +1281,12 @@ export async function syncWorkspace(
     if (member.mode === "worktree") {
       try {
         if (isLegacyWorktree(workspace, member)) {
-          await verifyManagedWorktree(member.worktreePath, repository.absolutePath, member.branch);
+          await verifyManagedWorktree(
+            member.worktreePath,
+            repository.absolutePath,
+            member.branch,
+            member.detached,
+          );
           continue;
         }
         const expectedWorktreePath = managedWorktreePath(repository.absolutePath, workspace);
@@ -724,7 +1296,12 @@ export async function syncWorkspace(
             `Managed worktree path is unexpected: ${member.worktreePath}`,
           );
         }
-        await verifyManagedWorktree(member.worktreePath, repository.absolutePath, member.branch);
+        await verifyManagedWorktree(
+          member.worktreePath,
+          repository.absolutePath,
+          member.branch,
+          member.detached,
+        );
         const memberPath = workspaceMemberPath(workspace, member);
         if (!(await pathEntryExists(memberPath))) {
           await createVerifiedLink(memberPath, member.worktreePath);
@@ -860,6 +1437,7 @@ export async function migrateWorkspaces(
       candidate.source,
       candidate.repositoryPath,
       candidate.member.branch,
+      candidate.member.detached,
     );
     if (await pathEntryExists(candidate.target)) {
       throw new CompulsiveError(
@@ -968,6 +1546,7 @@ export async function deleteWorkspace(paths: StoragePaths, id: WorkspaceId): Pro
     memberPath: string;
     path: string;
     branch: string;
+    detached?: true;
     repositoryPath: string;
     linked: boolean;
   }> = [];
@@ -980,6 +1559,7 @@ export async function deleteWorkspace(paths: StoragePaths, id: WorkspaceId): Pro
         memberPath: state.memberPath,
         path: state.worktreePath,
         branch: member.branch,
+        ...(member.detached ? { detached: true as const } : {}),
         repositoryPath: repository.absolutePath,
         linked: state.linked,
       });
@@ -1013,7 +1593,15 @@ export async function deleteWorkspace(paths: StoragePaths, id: WorkspaceId): Pro
     const rollbackErrors = await runRollbacks([
       ...removed.map((link) => () => symlink(link.target, link.path)),
       ...removedWorktrees.map((worktree) => async () => {
-        await addGitWorktree(worktree.repositoryPath, worktree.path, worktree.branch, false);
+        await addGitWorktree(
+          worktree.repositoryPath,
+          worktree.path,
+          worktree.branch,
+          false,
+          undefined,
+          worktree.branch,
+          worktree.detached,
+        );
         if (worktree.linked) await createVerifiedLink(worktree.memberPath, worktree.path);
       }),
     ]);
@@ -1033,5 +1621,14 @@ export async function deleteWorkspace(paths: StoragePaths, id: WorkspaceId): Pro
     await rmdir(workspace.absolutePath);
   } else if (entries.length === 0) {
     await rmdir(workspace.absolutePath);
+  }
+  try {
+    const statusRegistry = await readWorkspaceStatusRegistry(paths.workspaceStatuses);
+    statusRegistry.statuses = statusRegistry.statuses.filter(
+      ({ workspaceId }) => workspaceId !== workspace.id,
+    );
+    await writeJsonAtomic(paths.workspaceStatuses, statusRegistry);
+  } catch {
+    // Cache cleanup must not turn a completed workspace deletion into a failure.
   }
 }

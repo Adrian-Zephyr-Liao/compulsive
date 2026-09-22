@@ -49,6 +49,9 @@ describe("RepositoryManager state", () => {
     await expect(readFile(join(dataDir, "workspaces.json"), "utf8")).resolves.toContain(
       '"workspaces": []',
     );
+    await expect(readFile(join(dataDir, "workspace-statuses.json"), "utf8")).resolves.toContain(
+      '"statuses": []',
+    );
   });
 
   it("registers a local repository in place and persists it", async () => {

@@ -1,6 +1,6 @@
 {
   "name": "@adrian-zephyr/compulsive",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "A safe local Git repository organizer and CLI.",
   "keywords": [
     "cli",
@@ -66,12 +66,17 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",
+    "@iconify-json/ph": "^1.2.2",
     "@types/node": "^24.3.0",
+    "@vitejs/plugin-vue": "^6.0.9",
+    "floating-vue": "^5.4.0",
     "publint": "0.3.24",
     "typescript": "^7.0.0",
+    "unocss": "^66.10.5",
     "vite": "npm:@voidzero-dev/vite-plus-core@^0.2.8",
     "vite-plus": "^0.2.8",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "vue": "^3.5.43"
   },
   "engines": {
     "node": ">=22.18.0"

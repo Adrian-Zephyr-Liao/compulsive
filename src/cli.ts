@@ -488,10 +488,13 @@ async function inspectWorkspaceMember(
     runGit(["branch", "--show-current"], { cwd: member.worktreePath }),
     runGit(["status", "--porcelain"], { cwd: member.worktreePath }),
   ]);
-  if (memberCommon !== repositoryCommon || branch.stdout !== member.branch) {
+  if (
+    memberCommon !== repositoryCommon ||
+    branch.stdout !== (member.detached ? "" : member.branch)
+  ) {
     throw new Error("Git worktree identity does not match workspace metadata.");
   }
-  return `worktree ${member.branch} -> ${member.worktreePath}${status.stdout ? " (dirty)" : ""}`;
+  return `worktree ${member.detached ? `detached at ${member.branch}` : member.branch} -> ${member.worktreePath}${status.stdout ? " (dirty)" : ""}`;
 }
 
 async function handleDoctor(context: CliContext, json: boolean): Promise<void> {

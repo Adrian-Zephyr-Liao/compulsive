@@ -4,12 +4,18 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { CompulsiveError } from "./errors.js";
-import type { ManagerConfig, RepositoryRegistry, WorkspaceRegistry } from "./types.js";
+import type {
+  ManagerConfig,
+  RepositoryRegistry,
+  WorkspaceRegistry,
+  WorkspaceStatusRegistry,
+} from "./types.js";
 
 export interface StoragePaths {
   config: string;
   registry: string;
   workspaces: string;
+  workspaceStatuses: string;
 }
 
 export function createStoragePaths(dataDir: string): StoragePaths {
@@ -17,6 +23,7 @@ export function createStoragePaths(dataDir: string): StoragePaths {
     config: join(dataDir, "config.json"),
     registry: join(dataDir, "repositories.json"),
     workspaces: join(dataDir, "workspaces.json"),
+    workspaceStatuses: join(dataDir, "workspace-statuses.json"),
   };
 }
 
@@ -156,6 +163,7 @@ function isWorkspaceMember(value: unknown): boolean {
   return (
     typeof member.branch === "string" &&
     member.branch.length > 0 &&
+    (member.detached === undefined || member.detached === true) &&
     typeof member.worktreePath === "string" &&
     isAbsolute(member.worktreePath)
   );
@@ -209,4 +217,55 @@ export async function readWorkspaceRegistry(path: string): Promise<WorkspaceRegi
     throw new CompulsiveError("FILESYSTEM_FAILED", "Workspace index contains duplicate entries.");
   }
   return registry;
+}
+
+function isWorkspaceMemberStatus(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const status = value as Record<string, unknown>;
+  return (
+    typeof status.repositoryId === "string" &&
+    typeof status.branch === "string" &&
+    typeof status.detached === "boolean" &&
+    (status.defaultBranch === undefined || typeof status.defaultBranch === "string") &&
+    (status.ahead === undefined || typeof status.ahead === "number") &&
+    (status.behind === undefined || typeof status.behind === "number") &&
+    (status.upstream === undefined || typeof status.upstream === "string") &&
+    (status.unpushed === undefined || typeof status.unpushed === "number") &&
+    Array.isArray(status.changes) &&
+    status.changes.every((change) => typeof change === "string") &&
+    Array.isArray(status.conflicts) &&
+    status.conflicts.every((conflict) => typeof conflict === "string") &&
+    (status.comparisonError === undefined || typeof status.comparisonError === "string")
+  );
+}
+
+export async function readWorkspaceStatusRegistry(path: string): Promise<WorkspaceStatusRegistry> {
+  if (!(await fileExists(path))) return { schemaVersion: 1, statuses: [] };
+  const value = await readJson(path);
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("schemaVersion" in value) ||
+    value.schemaVersion !== 1 ||
+    !("statuses" in value) ||
+    !Array.isArray(value.statuses) ||
+    !value.statuses.every(
+      (status) =>
+        typeof status === "object" &&
+        status !== null &&
+        "workspaceId" in status &&
+        typeof status.workspaceId === "string" &&
+        "checkedAt" in status &&
+        typeof status.checkedAt === "string" &&
+        "members" in status &&
+        Array.isArray(status.members) &&
+        status.members.every(isWorkspaceMemberStatus),
+    )
+  ) {
+    throw new CompulsiveError(
+      "FILESYSTEM_FAILED",
+      "Workspace status cache has an unsupported format.",
+    );
+  }
+  return value as WorkspaceStatusRegistry;
 }
