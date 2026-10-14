@@ -1,6 +1,17 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
-import { connectDevframe } from "devframe/client";
+import ActionButton from "@antfu/design/components/Action/ActionButton.vue";
+import ActionIconButton from "@antfu/design/components/Action/ActionIconButton.vue";
+import FormCheckbox from "@antfu/design/components/Form/FormCheckbox.vue";
+import FormCombobox from "@antfu/design/components/Form/FormCombobox.vue";
+import FormTextInput from "@antfu/design/components/Form/FormTextInput.vue";
+import OverlayModal from "@antfu/design/components/Overlay/OverlayModal.vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import {
+  connectDevframe,
+  DevframeConnectionError,
+  type DevframeRpcClient,
+  type DevframeScopedClientRpc,
+} from "devframe/client";
 
 import type { DevtoolState, DevtoolWorkspace } from "../devtool.js";
 import type {
@@ -9,8 +20,6 @@ import type {
   WorkspaceMemberStatus,
   WorkspaceStatusResult,
 } from "../types.js";
-import ActionIconButton from "./ActionIconButton.vue";
-
 const state = ref<DevtoolState>({
   config: { schemaVersion: 1, rootDir: "", workspaceRoot: "", scanRoots: [] },
   repositories: [],
@@ -23,22 +32,18 @@ const newWorkspaceName = ref("");
 const showCreate = ref(false);
 const showAdd = ref(false);
 const selectedRepositoryId = ref("");
-const addRepositoryOpen = ref(false);
-const addRepositoryQuery = ref("");
 const alias = ref("");
 const branch = ref("");
 const createBranch = ref(true);
 const busyAction = ref("");
-const connectionState = ref<"connecting" | "connected" | "failed">("connecting");
+const connectionState = ref<"connecting" | "connected" | "reconnecting" | "failed">("connecting");
 const fatalError = ref("");
 const feedback = ref<{ title: string; message: string; error: boolean }>();
 
-const cloneDialog = ref<HTMLDialogElement>();
-const confirmDialog = ref<HTMLDialogElement>();
-const promoteDialog = ref<HTMLDialogElement>();
+const cloneOpen = ref(false);
+const confirmOpen = ref(false);
+const promoteOpen = ref(false);
 const cloneSourceId = ref("");
-const cloneSourceOpen = ref(false);
-const cloneSourceQuery = ref("");
 const cloneTargetName = ref("");
 const cloneBranchName = ref("");
 const cloneBranchCustomized = ref(false);
@@ -62,12 +67,18 @@ const confirmState = ref<{
   confirmLabel?: string;
   warning?: string;
 }>();
-let returnFocus: HTMLElement | null = null;
 let statusRequestId = 0;
 let statusWorkspaceId: string | undefined;
+let activeClient: DevframeRpcClient | undefined;
+let stopConnectionStatus: (() => void) | undefined;
+let reconnectPromise: Promise<DevframeScopedClientRpc<"compulsive">> | undefined;
+let reconnectTimer: number | undefined;
+let wakeReconnectDelay: (() => void) | undefined;
+let reconnectAttempt = 0;
+let disposed = false;
+let rpcPromise: Promise<DevframeScopedClientRpc<"compulsive">>;
 
-const rpcPromise = connectDevframe().then((client) => client.scope("compulsive").rpc);
-const busy = computed(() => Boolean(busyAction.value));
+const busy = computed(() => Boolean(busyAction.value) || connectionState.value !== "connected");
 const currentWorkspace = computed(() =>
   state.value.workspaces.find((workspace) => workspace.id === selectedWorkspaceId.value),
 );
@@ -81,16 +92,21 @@ const availableRepositories = computed(() => {
   const memberIds = new Set(currentWorkspace.value?.members.map((member) => member.repositoryId));
   return state.value.repositories.filter((repository) => !memberIds.has(repository.id));
 });
-const selectedRepository = computed(() =>
-  availableRepositories.value.find((repository) => repository.id === selectedRepositoryId.value),
+const repositoryOptions = computed(() =>
+  availableRepositories.value.map((repository) => ({
+    value: repository.classificationPath,
+    label: repository.classificationPath,
+  })),
 );
-const filteredAvailableRepositories = computed(() => {
-  const query = addRepositoryQuery.value.trim().toLowerCase();
-  return availableRepositories.value.filter((repository) =>
-    [repository.name, repository.classificationPath].some((value) =>
-      value.toLowerCase().includes(query),
-    ),
-  );
+const selectedRepositoryPath = computed({
+  get: () =>
+    availableRepositories.value.find((repository) => repository.id === selectedRepositoryId.value)
+      ?.classificationPath ?? "",
+  set: (path: string | undefined) => {
+    selectedRepositoryId.value =
+      availableRepositories.value.find((repository) => repository.classificationPath === path)
+        ?.id ?? "";
+  },
 });
 const cloneSource = computed(() =>
   state.value.workspaces.find((workspace) => workspace.id === cloneSourceId.value),
@@ -101,11 +117,15 @@ const cloneSourceMembers = computed(() =>
     repository: repositoryFor(member),
   })),
 );
-const filteredCloneSources = computed(() => {
-  const query = cloneSourceQuery.value.trim().toLowerCase();
-  return state.value.workspaces.filter((workspace) =>
-    [workspace.name, workspace.absolutePath].some((value) => value.toLowerCase().includes(query)),
-  );
+const cloneSourceOptions = computed(() =>
+  state.value.workspaces.map((workspace) => ({ value: workspace.name, label: workspace.name })),
+);
+const cloneSourceName = computed({
+  get: () => cloneSource.value?.name ?? "",
+  set: (name: string | undefined) => {
+    cloneSourceId.value =
+      state.value.workspaces.find((workspace) => workspace.name === name)?.id ?? "";
+  },
 });
 const filteredCloneMembers = computed(() => {
   const query = cloneRepositoryQuery.value.trim().toLowerCase();
@@ -135,8 +155,6 @@ const cloneCanSubmit = computed(
 
 watch(selectedWorkspaceId, (workspaceId) => {
   showAdd.value = false;
-  addRepositoryOpen.value = false;
-  addRepositoryQuery.value = "";
   alias.value = "";
   branch.value = "";
   createBranch.value = true;
@@ -148,8 +166,6 @@ watch(availableRepositories, (repositories) => {
     selectedRepositoryId.value = repositories[0]?.id ?? "";
 });
 watch(cloneSourceId, () => {
-  cloneSourceOpen.value = false;
-  cloneSourceQuery.value = "";
   cloneRepositoryQuery.value = "";
   cloneSelectedIds.value = cloneSource.value?.members.map((member) => member.repositoryId) ?? [];
   cloneReferenceIds.value = [];
@@ -170,12 +186,143 @@ function describeError(error: unknown): string {
   }
   return String(error);
 }
+function applyState(
+  nextState: DevtoolState,
+  preferredWorkspaceId = selectedWorkspaceId.value,
+): void {
+  state.value = nextState;
+  workspaceStatuses.value = Object.fromEntries(
+    state.value.workspaceStatuses.map((status) => [status.workspaceId, status]),
+  );
+  selectedWorkspaceId.value = state.value.workspaces.some(
+    (workspace) => workspace.id === preferredWorkspaceId,
+  )
+    ? preferredWorkspaceId
+    : state.value.workspaces[0]?.id;
+}
+async function waitForReconnectHost(): Promise<void> {
+  const url =
+    activeClient?.connection.metaBaseUrl ?? new URL("./__connection.json", document.baseURI);
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) throw new Error(`Devframe connection check failed: ${response.status}`);
+}
+async function loadState(
+  rpc: DevframeScopedClientRpc<"compulsive">,
+  reconnecting: boolean,
+): Promise<DevtoolState> {
+  const request = rpc.call("get-state");
+  if (!reconnecting) return request;
+  let timer: number | undefined;
+  try {
+    return await Promise.race([
+      request,
+      new Promise<never>((_, reject) => {
+        timer = window.setTimeout(() => reject(new Error("Devframe reconnect timed out.")), 5_000);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) window.clearTimeout(timer);
+  }
+}
+async function connectRpc(reconnecting = false): Promise<DevframeScopedClientRpc<"compulsive">> {
+  connectionState.value = reconnecting ? "reconnecting" : "connecting";
+  let client: DevframeRpcClient | undefined;
+  try {
+    if (reconnecting) await waitForReconnectHost();
+    client = await connectDevframe();
+    const previousClient = activeClient;
+    stopConnectionStatus?.();
+    activeClient = client;
+    stopConnectionStatus = client.events.on("connection:status", (status) => {
+      if (client !== activeClient) return;
+      if (status === "unauthorized") {
+        connectionState.value = "failed";
+        fatalError.value = describeError(
+          client.connectionError ?? "Devframe authorization failed.",
+        );
+      } else if (status === "disconnected" || status === "error") {
+        void reconnect(client.connectionError ?? "Devframe connection closed.").catch(
+          () => undefined,
+        );
+      }
+    });
+    previousClient?.close?.();
+    const rpc = client.scope("compulsive").rpc;
+    applyState(await loadState(rpc, reconnecting));
+    if (client !== activeClient) throw new Error("Devframe connection was replaced.");
+    reconnectAttempt = 0;
+    fatalError.value = "";
+    connectionState.value = "connected";
+    return rpc;
+  } catch (error) {
+    if (client && client === activeClient) {
+      stopConnectionStatus?.();
+      stopConnectionStatus = undefined;
+      activeClient = undefined;
+      client.close?.();
+    }
+    fatalError.value = describeError(error);
+    if (error instanceof DevframeConnectionError && error.kind === "auth") {
+      connectionState.value = "failed";
+    }
+    throw error;
+  }
+}
+function reconnect(error: unknown): Promise<DevframeScopedClientRpc<"compulsive">> {
+  if (error instanceof DevframeConnectionError && error.kind === "auth") {
+    connectionState.value = "failed";
+    fatalError.value = describeError(error);
+    return Promise.reject(error);
+  }
+  if (reconnectPromise) return reconnectPromise;
+  connectionState.value = "reconnecting";
+  fatalError.value = describeError(error);
+  const promise = (async () => {
+    while (!disposed) {
+      const delay = Math.min(500 * 2 ** reconnectAttempt, 5_000);
+      reconnectAttempt += 1;
+      await new Promise<void>((resolve) => {
+        wakeReconnectDelay = resolve;
+        reconnectTimer = window.setTimeout(resolve, delay);
+      });
+      reconnectTimer = undefined;
+      wakeReconnectDelay = undefined;
+      if (disposed) break;
+      try {
+        return await connectRpc(true);
+      } catch (connectionError) {
+        if (connectionError instanceof DevframeConnectionError && connectionError.kind === "auth") {
+          throw connectionError;
+        }
+        fatalError.value = describeError(connectionError);
+      }
+    }
+    throw new Error("Devframe connection closed.");
+  })();
+  reconnectPromise = promise;
+  rpcPromise = promise;
+  void promise
+    .finally(() => {
+      if (reconnectPromise === promise) reconnectPromise = undefined;
+    })
+    .catch(() => undefined);
+  return promise;
+}
 function repositoryFor(member: WorkspaceMember): RepositoryRecord | undefined {
   return state.value.repositories.find((repository) => repository.id === member.repositoryId);
 }
 function statusFor(member: WorkspaceMember): WorkspaceMemberStatus | undefined {
   return workspaceStatus.value?.members.find(
     (status) => status.repositoryId === member.repositoryId,
+  );
+}
+function isTaskComplete(member: WorkspaceMember): boolean {
+  const status = statusFor(member);
+  return Boolean(
+    status?.mergedIntoDefault &&
+    !status.unpushed &&
+    !status.changes.length &&
+    !status.conflicts.length,
   );
 }
 function isNonDefaultBranch(member: WorkspaceMember): boolean {
@@ -190,23 +337,9 @@ function storeWorkspaceStatus(status: WorkspaceStatusResult): void {
   workspaceStatus.value = status;
   workspaceStatusFresh.value = true;
 }
-function rememberFocus(): void {
-  returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-}
-function restoreFocus(): void {
-  nextTick(() => returnFocus?.focus());
-}
 async function refresh(preferredWorkspaceId = selectedWorkspaceId.value): Promise<void> {
   const rpc = await rpcPromise;
-  state.value = await rpc.call("get-state");
-  workspaceStatuses.value = Object.fromEntries(
-    state.value.workspaceStatuses.map((status) => [status.workspaceId, status]),
-  );
-  selectedWorkspaceId.value = state.value.workspaces.some(
-    (workspace) => workspace.id === preferredWorkspaceId,
-  )
-    ? preferredWorkspaceId
-    : state.value.workspaces[0]?.id;
+  applyState(await rpc.call("get-state"), preferredWorkspaceId);
 }
 async function runAction(
   name: string,
@@ -315,15 +448,15 @@ function openPromoteReference(
   workspace: DevtoolWorkspace,
   member: Extract<WorkspaceMember, { mode: "worktree" }>,
 ): void {
-  rememberFocus();
   promoteMember.value = member;
-  promoteBranch.value = `workspace/${workspace.name}/${member.alias}`;
+  promoteBranch.value = member.detached
+    ? `workspace/${workspace.name}/${member.alias}`
+    : member.branch;
   promoteError.value = "";
-  promoteDialog.value?.showModal();
-  nextTick(() => document.querySelector<HTMLInputElement>("#promote-branch")?.focus());
+  promoteOpen.value = true;
 }
 function closePromoteReference(): void {
-  if (!busy.value) promoteDialog.value?.close();
+  if (!busy.value) promoteOpen.value = false;
 }
 async function submitPromoteReference(): Promise<void> {
   const workspace = currentWorkspace.value;
@@ -333,18 +466,18 @@ async function submitPromoteReference(): Promise<void> {
   const rpc = await rpcPromise;
   promoteError.value = "";
   const succeeded = await runAction(
-    "切换开发分支",
+    member.detached ? "转为开发分支" : "切换开发分支",
     () =>
-      rpc.call("promote-workspace-reference", {
+      rpc.call("switch-workspace-member-branch", {
         workspaceId: workspace.id,
         repositoryId: member.repositoryId,
         branch,
       }),
-    `已将 ${member.alias} 转为开发分支`,
+    member.detached ? `已将 ${member.alias} 转为开发分支` : `已切换 ${member.alias} 的分支`,
     workspace.id,
   );
   if (succeeded) {
-    promoteDialog.value?.close();
+    promoteOpen.value = false;
   } else promoteError.value = feedback.value?.message ?? "转换失败";
 }
 function canRebase(member: WorkspaceMember): boolean {
@@ -352,9 +485,9 @@ function canRebase(member: WorkspaceMember): boolean {
   return Boolean(
     workspaceStatusFresh.value &&
     member.mode === "worktree" &&
-    !member.detached &&
     status &&
     !status.comparisonError &&
+    !isTaskComplete(member) &&
     status.behind &&
     !status.changes.length &&
     !status.conflicts.length,
@@ -374,13 +507,15 @@ function canPush(member: WorkspaceMember): boolean {
 async function rebaseMember(workspace: DevtoolWorkspace, member: WorkspaceMember): Promise<void> {
   const rpc = await rpcPromise;
   await runAction(
-    "Rebase 主分支",
+    member.mode === "worktree" && member.detached ? "更新参考代码" : "Rebase 主分支",
     () =>
       rpc.call("rebase-workspace-member", {
         workspaceId: workspace.id,
         repositoryId: member.repositoryId,
       }),
-    `已更新 ${member.alias}`,
+    member.mode === "worktree" && member.detached
+      ? `已拉取 ${member.alias} 的最新主分支`
+      : `已更新 ${member.alias}`,
     workspace.id,
   );
 }
@@ -429,7 +564,6 @@ async function addMember(workspace: DevtoolWorkspace): Promise<void> {
   if (succeeded) showAdd.value = false;
 }
 function openClone(): void {
-  rememberFocus();
   cloneSourceId.value = currentWorkspace.value?.id ?? state.value.workspaces[0]?.id ?? "";
   cloneTargetName.value = "";
   cloneBranchName.value = "";
@@ -438,11 +572,10 @@ function openClone(): void {
   cloneRepositoryQuery.value = "";
   cloneSelectedIds.value = cloneSource.value?.members.map((member) => member.repositoryId) ?? [];
   cloneReferenceIds.value = [];
-  cloneDialog.value?.showModal();
-  nextTick(() => document.querySelector<HTMLInputElement>("#clone-name")?.focus());
+  cloneOpen.value = true;
 }
 function closeClone(): void {
-  if (!busy.value) cloneDialog.value?.close();
+  if (!busy.value) cloneOpen.value = false;
 }
 function toggleCloneRepository(id: string): void {
   if (cloneSelectedIds.value.includes(id)) {
@@ -481,7 +614,7 @@ async function submitClone(): Promise<void> {
       message: `已创建 ${cloneDevelopmentCount.value} 个开发分支和 ${cloneReferenceIds.value.length} 个参考 worktree。`,
       error: false,
     };
-    cloneDialog.value?.close();
+    cloneOpen.value = false;
   } catch (error) {
     cloneError.value = describeError(error);
     feedback.value = { title: "克隆失败", message: cloneError.value, error: true };
@@ -490,18 +623,18 @@ async function submitClone(): Promise<void> {
   }
 }
 function openDeleteWorkspace(workspace: DevtoolWorkspace): void {
-  rememberFocus();
   confirmState.value = {
     title: `删除 ${workspace.name}？`,
     message:
-      "将移除 Workspace 及其干净的 worktree；未提交的改动会阻止删除。ChatGPT 暂无项目删除接口，如已添加需在应用中手动移除。",
+      "将删除 Workspace、其干净的 worktree，以及磁盘上的整个 Workspace 目录。ChatGPT 暂无项目删除接口，如已添加需在应用中手动移除。",
+    warning: "目录内所有文件都会永久删除；未提交的 worktree 改动会阻止删除。",
+    confirmLabel: "永久删除",
     action: "delete-workspace",
     workspace,
   };
-  confirmDialog.value?.showModal();
+  confirmOpen.value = true;
 }
 function openRemoveMember(workspace: DevtoolWorkspace, member: WorkspaceMember): void {
-  rememberFocus();
   confirmState.value = {
     title: `移除 ${member.alias}？`,
     message: `将从 ${workspace.name} 移除该成员；未提交的改动会阻止操作。`,
@@ -509,13 +642,12 @@ function openRemoveMember(workspace: DevtoolWorkspace, member: WorkspaceMember):
     workspace,
     member,
   };
-  confirmDialog.value?.showModal();
+  confirmOpen.value = true;
 }
 function openConvertToReference(
   workspace: DevtoolWorkspace,
   member: Extract<WorkspaceMember, { mode: "worktree" }>,
 ): void {
-  rememberFocus();
   confirmState.value = {
     title: `将 ${member.alias} 转为参考？`,
     message: `worktree 将切换到最新远端主分支的 detached HEAD；本地分支 ${member.branch} 会保留。`,
@@ -525,12 +657,12 @@ function openConvertToReference(
     workspace,
     member,
   };
-  confirmDialog.value?.showModal();
+  confirmOpen.value = true;
 }
 async function confirmAction(): Promise<void> {
   const pending = confirmState.value;
   if (!pending || busy.value) return;
-  confirmDialog.value?.close();
+  confirmOpen.value = false;
   const rpc = await rpcPromise;
   if (pending.action === "delete-workspace") {
     await runAction(
@@ -565,15 +697,22 @@ async function confirmAction(): Promise<void> {
   );
 }
 
+rpcPromise = connectRpc().catch((error) => reconnect(error));
+
 onMounted(async () => {
   try {
     await rpcPromise;
-    connectionState.value = "connected";
-    await refresh();
   } catch (error) {
     connectionState.value = "failed";
     fatalError.value = describeError(error);
   }
+});
+onBeforeUnmount(() => {
+  disposed = true;
+  if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+  wakeReconnectDelay?.();
+  stopConnectionStatus?.();
+  activeClient?.close?.();
 });
 </script>
 
@@ -585,8 +724,16 @@ onMounted(async () => {
         ><span class="brand-divider" /><span>Workspace DevTool</span>
       </div>
       <div class="connection" :class="connectionState" role="status" aria-live="polite">
-        <span :class="busy ? 'spinner' : 'connection-dot'" />{{
-          connectionState === "failed" ? "连接失败" : busy ? busyAction : "已连接"
+        <span
+          :class="connectionState !== 'connected' || busyAction ? 'spinner' : 'connection-dot'"
+        />{{
+          connectionState === "failed"
+            ? "连接失败"
+            : connectionState === "reconnecting"
+              ? "正在重连"
+              : connectionState === "connecting"
+                ? "正在连接"
+                : busyAction || "已连接"
         }}
       </div>
     </header>
@@ -595,29 +742,29 @@ onMounted(async () => {
       <aside class="workspace-sidebar" aria-label="Workspace 索引">
         <div class="sidebar-title">
           <h1>Workspace</h1>
-          <button
-            class="icon-button"
-            type="button"
-            aria-label="新建 Workspace"
+          <ActionIconButton
+            icon="i-ph-plus"
+            tooltip="新建 Workspace"
             @click="showCreate = !showCreate"
-          >
-            <span class="i-ph-plus" />
-          </button>
+          />
         </div>
         <form v-if="showCreate" class="create-row" @submit.prevent="createWorkspace">
-          <label class="sr-only" for="workspace-name">Workspace 名称</label
-          ><input
-            id="workspace-name"
+          <FormTextInput
             v-model="newWorkspaceName"
-            class="control"
-            required
+            icon="i-ph-folder-plus"
             placeholder="Workspace 名称"
-          /><button class="button primary compact" type="submit" :disabled="busy">创建</button>
+          >
+            <template #prefix><span class="sr-only">Workspace 名称</span></template>
+          </FormTextInput>
+          <ActionButton variant="primary" type="submit" :disabled="busy">创建</ActionButton>
         </form>
-        <label class="search-control"
-          ><span class="i-ph-magnifying-glass" /><span class="sr-only">搜索 Workspace</span
-          ><input v-model="workspaceQuery" type="search" placeholder="搜索 Workspace"
-        /></label>
+        <FormTextInput
+          v-model="workspaceQuery"
+          type="search"
+          icon="i-ph-magnifying-glass"
+          clearable
+          placeholder="搜索 Workspace"
+        />
         <nav class="workspace-list" aria-label="Workspace">
           <button
             v-for="workspace in filteredWorkspaces"
@@ -645,12 +792,15 @@ onMounted(async () => {
       </aside>
 
       <section class="workspace-content">
-        <div v-if="fatalError" class="feedback-card error" role="alert">
+        <div v-if="connectionState === 'failed'" class="feedback-card error" role="alert">
           <strong>无法连接 Devframe</strong>
           <p>{{ fatalError }}</p>
         </div>
-        <div v-else-if="connectionState === 'connecting'" class="empty page">
-          <span class="spinner large" /><strong>正在读取 Workspace</strong>
+        <div v-else-if="connectionState !== 'connected' && !currentWorkspace" class="empty page">
+          <span class="spinner large" /><strong>{{
+            connectionState === "reconnecting" ? "正在重新连接 Devframe" : "正在读取 Workspace"
+          }}</strong>
+          <p v-if="fatalError">{{ fatalError }}</p>
         </div>
         <div v-else-if="!currentWorkspace" class="empty page">
           <span class="i-ph-folders-duotone" /><strong>还没有 Workspace</strong>
@@ -664,37 +814,36 @@ onMounted(async () => {
               <code>{{ currentWorkspace.absolutePath }}</code>
             </div>
             <div class="heading-actions">
-              <button class="button" type="button" @click="copyCommand(currentWorkspace)">
-                <span class="i-ph-copy" />复制路径</button
-              ><button
-                class="button"
-                type="button"
+              <ActionButton icon="i-ph-copy" @click="copyCommand(currentWorkspace)">
+                复制路径
+              </ActionButton>
+              <ActionButton
+                icon="i-ph-arrows-clockwise"
                 :disabled="busy"
                 @click="syncWorkspace(currentWorkspace)"
               >
-                <span class="i-ph-arrows-clockwise" />修复链接</button
-              ><button
-                class="button"
-                type="button"
+                修复链接
+              </ActionButton>
+              <ActionButton
+                icon="i-ph-open-ai-logo"
                 :disabled="busy"
                 @click="openWorkspaceInChatgpt(currentWorkspace)"
               >
-                <span class="i-ph-open-ai-logo" />在 ChatGPT 中打开</button
-              ><button
-                class="button primary"
-                type="button"
+                在 ChatGPT 中打开
+              </ActionButton>
+              <ActionButton
+                variant="primary"
+                icon="i-ph-plus"
                 :disabled="!currentWorkspace.members.length || busy"
                 @click="openClone"
               >
-                <span class="i-ph-plus" />克隆 Workspace</button
-              ><button
-                class="icon-button"
-                type="button"
-                aria-label="删除 Workspace"
+                克隆 Workspace
+              </ActionButton>
+              <ActionIconButton
+                icon="i-ph-trash"
+                tooltip="删除 Workspace"
                 @click="openDeleteWorkspace(currentWorkspace)"
-              >
-                <span class="i-ph-trash" />
-              </button>
+              />
             </div>
           </div>
 
@@ -718,86 +867,64 @@ onMounted(async () => {
                           : "尚未检查"
                       }}
                     </small>
-                    <button
-                      class="button"
-                      type="button"
+                    <ActionButton
+                      icon="i-ph-magnifying-glass"
+                      :loading="statusLoading"
                       :disabled="statusLoading"
                       @click="refreshWorkspaceStatus()"
                     >
-                      <span v-if="statusLoading" class="spinner" />
-                      <span v-else class="i-ph-magnifying-glass" />检查状态
-                    </button>
-                    <button class="button" type="button" @click="showAdd = !showAdd">
-                      <span class="i-ph-plus" />添加仓库
-                    </button>
+                      检查状态
+                    </ActionButton>
+                    <ActionButton icon="i-ph-plus" @click="showAdd = !showAdd">
+                      添加仓库
+                    </ActionButton>
                   </div>
                 </div>
                 <form v-if="showAdd" class="add-form" @submit.prevent="addMember(currentWorkspace)">
-                  <div
-                    class="add-repository-field"
-                    @keydown.escape.stop="addRepositoryOpen = false"
-                  >
+                  <label class="add-repository-field">
                     <span>仓库</span>
-                    <button
-                      class="select-trigger"
-                      type="button"
+                    <FormCombobox
+                      v-model="selectedRepositoryPath"
+                      class="w-full"
+                      :options="repositoryOptions"
                       :disabled="!availableRepositories.length"
-                      :aria-expanded="addRepositoryOpen"
-                      aria-haspopup="listbox"
-                      @click="addRepositoryOpen = !addRepositoryOpen"
+                      placeholder="搜索仓库"
                     >
-                      <span
-                        ><span class="i-ph-git-branch" />{{
-                          selectedRepository?.classificationPath ?? "暂无可用仓库"
-                        }}</span
-                      >
-                      <span class="i-ph-caret-down" />
-                    </button>
-                    <div v-if="addRepositoryOpen" class="select-popover add-select-popover">
-                      <label class="search-control"
-                        ><span class="i-ph-magnifying-glass" /><span class="sr-only">搜索仓库</span
-                        ><input v-model="addRepositoryQuery" type="search" placeholder="搜索仓库"
-                      /></label>
-                      <div role="listbox" aria-label="可添加的仓库">
-                        <button
-                          v-for="repository in filteredAvailableRepositories"
-                          :key="repository.id"
-                          type="button"
-                          role="option"
-                          :aria-selected="repository.id === selectedRepositoryId"
-                          @click="
-                            selectedRepositoryId = repository.id;
-                            addRepositoryOpen = false;
-                          "
+                      <template #option="{ option }">
+                        <span class="combobox-option"
+                          ><span class="i-ph-git-branch" />{{ option.label }}</span
                         >
-                          <span class="i-ph-git-branch" />{{ repository.classificationPath }}
-                          <span v-if="repository.id === selectedRepositoryId" class="i-ph-check" />
-                        </button>
-                        <p v-if="!filteredAvailableRepositories.length" class="popover-empty">
-                          没有匹配的仓库
-                        </p>
-                      </div>
-                    </div>
+                      </template>
+                      <template #empty>没有匹配的仓库</template>
+                    </FormCombobox>
+                  </label>
+                  <div class="form-field">
+                    <span>目录别名</span>
+                    <FormTextInput v-model="alias" placeholder="默认使用仓库名">
+                      <template #prefix><span class="sr-only">目录别名</span></template>
+                    </FormTextInput>
                   </div>
-                  <label
-                    ><span>目录别名</span
-                    ><input v-model="alias" class="control" placeholder="默认使用仓库名" /></label
-                  ><label
-                    ><span>分支</span
-                    ><input v-model="branch" class="control" placeholder="留空自动创建" /></label
-                  ><label class="checkbox"
-                    ><input
-                      v-model="createBranch"
-                      type="checkbox"
-                      :disabled="!branch.trim()"
-                    />新建指定分支</label
-                  ><button
-                    class="button primary"
+                  <div class="form-field">
+                    <span>分支</span>
+                    <FormTextInput
+                      v-model="branch"
+                      icon="i-ph-git-branch"
+                      placeholder="例如 feat/workspace-task"
+                    >
+                      <template #prefix><span class="sr-only">分支</span></template>
+                    </FormTextInput>
+                  </div>
+                  <FormCheckbox v-model="createBranch" class="checkbox" :disabled="!branch.trim()"
+                    >新建或跟踪远端同名分支；取消勾选则使用已有本地分支</FormCheckbox
+                  >
+                  <ActionButton
+                    class="add-submit"
+                    variant="primary"
                     type="submit"
-                    :disabled="!selectedRepositoryId || busy"
+                    :disabled="!selectedRepositoryId || !branch.trim() || busy"
                   >
                     加入 Workspace
-                  </button>
+                  </ActionButton>
                 </form>
                 <div v-if="currentWorkspace.members.length" class="repository-table">
                   <div class="table-head">
@@ -841,6 +968,16 @@ onMounted(async () => {
                         :title="statusFor(member)?.comparisonError"
                         ><span class="i-ph-warning-circle" />无法比较</span
                       ><template v-else-if="statusFor(member)">
+                        <span
+                          v-if="statusFor(member)!.mergedIntoDefault"
+                          class="health-chip merged"
+                          title="远端开发分支的最新提交已包含在主分支中"
+                          ><span class="i-ph-check-circle-fill" />{{
+                            isTaskComplete(member)
+                              ? "已合入主分支 · 可开启新 Workspace"
+                              : "远端已合入 · 本地仍有改动"
+                          }}</span
+                        >
                         <span v-if="statusFor(member)!.behind" class="health-chip behind"
                           >↓ {{ statusFor(member)!.behind }} 落后
                           {{ statusFor(member)!.defaultBranch }}</span
@@ -888,8 +1025,16 @@ onMounted(async () => {
                       />
                       <ActionIconButton
                         v-if="canRebase(member)"
-                        tooltip="Rebase 远端主分支"
-                        icon="i-ph-git-merge"
+                        :tooltip="
+                          member.mode === 'worktree' && member.detached
+                            ? '拉取最新主分支'
+                            : 'Rebase 远端主分支'
+                        "
+                        :icon="
+                          member.mode === 'worktree' && member.detached
+                            ? 'i-ph-cloud-arrow-down'
+                            : 'i-ph-git-merge'
+                        "
                         :disabled="busy"
                         @click="rebaseMember(currentWorkspace, member)"
                       />
@@ -901,8 +1046,8 @@ onMounted(async () => {
                         @click="pushMember(currentWorkspace, member)"
                       />
                       <ActionIconButton
-                        v-if="member.mode === 'worktree' && member.detached"
-                        tooltip="转为开发分支"
+                        v-if="member.mode === 'worktree'"
+                        :tooltip="member.detached ? '转为开发分支' : '切换开发分支'"
                         icon="i-ph-git-branch"
                         @click="openPromoteReference(currentWorkspace, member)"
                       />
@@ -929,7 +1074,7 @@ onMounted(async () => {
                 <div v-else class="empty repository-empty">
                   <span class="i-ph-folder-open-duotone" /><strong>还没有仓库</strong>
                   <p>添加已有仓库，开始组织工作区。</p>
-                  <button class="button" type="button" @click="showAdd = true">添加仓库</button>
+                  <ActionButton icon="i-ph-plus" @click="showAdd = true">添加仓库</ActionButton>
                 </div>
               </div>
             </section>
@@ -960,9 +1105,12 @@ onMounted(async () => {
               </section>
               <section>
                 <h3>快捷操作</h3>
-                <button class="quick-action" type="button" @click="copyCommand(currentWorkspace)">
-                  <span class="i-ph-terminal-window" />复制 cd 命令
-                </button>
+                <ActionButton
+                  class="quick-action"
+                  icon="i-ph-terminal-window"
+                  @click="copyCommand(currentWorkspace)"
+                  >复制 cd 命令</ActionButton
+                >
               </section>
               <section
                 v-if="feedback"
@@ -970,14 +1118,13 @@ onMounted(async () => {
                 :class="{ error: feedback.error }"
                 :role="feedback.error ? 'alert' : 'status'"
               >
-                <button
-                  class="icon-button feedback-close"
-                  type="button"
-                  aria-label="关闭反馈"
+                <ActionIconButton
+                  class="feedback-close"
+                  icon="i-ph-x"
+                  tooltip="关闭反馈"
                   @click="feedback = undefined"
-                >
-                  <span class="i-ph-x" /></button
-                ><span :class="feedback.error ? 'i-ph-x-circle-fill' : 'i-ph-check-circle-fill'" />
+                />
+                <span :class="feedback.error ? 'i-ph-x-circle-fill' : 'i-ph-check-circle-fill'" />
                 <div>
                   <strong>{{ feedback.title }}</strong>
                   <p>{{ feedback.message }}</p>
@@ -994,262 +1141,212 @@ onMounted(async () => {
       ><span>{{ currentWorkspace?.members.length ?? 0 }} 个仓库</span>
     </footer>
 
-    <dialog ref="promoteDialog" class="modal confirm-modal" @close="restoreFocus">
-      <form method="dialog" class="modal-card" @submit.prevent="submitPromoteReference">
-        <header>
+    <OverlayModal
+      v-model:open="promoteOpen"
+      :title="promoteMember?.detached ? '转为开发分支' : '切换开发分支'"
+      :description="`${promoteMember?.alias ?? ''} 将继续使用当前 worktree，不复制文件`"
+    >
+      <form id="promote-form" class="modal-form" @submit.prevent="submitPromoteReference">
+        <div class="field">
+          <span>开发分支名称</span>
+          <FormTextInput
+            v-model="promoteBranch"
+            icon="i-ph-git-branch"
+            placeholder="例如 feat/workspace-task"
+          >
+            <template #prefix><span class="sr-only">开发分支名称</span></template>
+          </FormTextInput>
+          <small
+            ><span class="i-ph-git-branch" />已有本地分支直接切换；仅远端存在时自动跟踪；否则从当前
+            HEAD 创建</small
+          >
+        </div>
+        <div class="origin-note">
+          <span class="i-ph-lightning" />
           <div>
-            <h2>转为开发分支</h2>
-            <p>{{ promoteMember?.alias }} 将继续使用当前 worktree，不复制文件</p>
-          </div>
-          <button
-            class="icon-button"
-            type="button"
-            aria-label="关闭"
-            :disabled="busy"
-            @click="closePromoteReference"
-          >
-            <span class="i-ph-x" />
-          </button>
-        </header>
-        <div class="modal-body">
-          <label class="field"
-            ><span>开发分支名称</span
-            ><input
-              id="promote-branch"
-              v-model="promoteBranch"
-              class="control"
-              required
-              autocomplete="off"
-              placeholder="例如 feat/workspace-task"
-            /><small
-              ><span class="i-ph-git-branch" />新分支从当前 reference 创建；已有分支直接切换</small
-            ></label
-          >
-          <div class="origin-note">
-            <span class="i-ph-lightning" />
-            <div>
-              <strong>原位切换</strong>
-              <p>保留当前目录；已有分支不会重建。若它也在其他 worktree 打开，请勿两处同时提交。</p>
-            </div>
-          </div>
-          <div v-if="promoteError" class="inline-error" role="alert">
-            <strong>转换失败</strong>
-            <p>{{ promoteError }}</p>
+            <strong>原位切换</strong>
+            <p>保留当前目录；已有分支不会重建。若它也在其他 worktree 打开，请勿两处同时提交。</p>
           </div>
         </div>
-        <footer>
-          <span>已有同名本地分支时直接切换，不覆盖提交。</span>
-          <div>
-            <button class="button" type="button" :disabled="busy" @click="closePromoteReference">
-              取消
-            </button>
-            <button class="button primary" type="submit" :disabled="!promoteBranch.trim() || busy">
-              <span v-if="busyAction === '切换开发分支'" class="spinner small" />切换开发分支
-            </button>
-          </div>
-        </footer>
+        <div v-if="promoteError" class="inline-error" role="alert">
+          <strong>切换失败</strong>
+          <p>{{ promoteError }}</p>
+        </div>
       </form>
-    </dialog>
+      <template #footer>
+        <span class="modal-footer-note">已有同名本地分支时直接切换，不覆盖提交。</span>
+        <ActionButton :disabled="busy" @click="closePromoteReference">取消</ActionButton>
+        <ActionButton
+          variant="primary"
+          type="submit"
+          form="promote-form"
+          :loading="busyAction === '切换开发分支' || busyAction === '转为开发分支'"
+          :disabled="!promoteBranch.trim() || busy"
+          >{{ promoteMember?.detached ? "转为开发分支" : "切换开发分支" }}</ActionButton
+        >
+      </template>
+    </OverlayModal>
 
-    <dialog ref="cloneDialog" class="modal clone-modal" @close="restoreFocus">
-      <form method="dialog" class="modal-card" @submit.prevent="submitClone">
-        <header>
+    <OverlayModal
+      v-model:open="cloneOpen"
+      title="克隆 Workspace"
+      description="选择仓库，创建独立工作区"
+    >
+      <form id="clone-form" class="modal-form clone-form" @submit.prevent="submitClone">
+        <label class="field">
+          <span>源 Workspace</span>
+          <FormCombobox
+            v-model="cloneSourceName"
+            class="w-full"
+            :options="cloneSourceOptions"
+            placeholder="搜索 Workspace"
+          >
+            <template #option="{ option }">
+              <span class="combobox-option"><span class="i-ph-folder" />{{ option.label }}</span>
+            </template>
+            <template #empty>没有匹配的 Workspace</template>
+          </FormCombobox>
+        </label>
+        <div class="field">
+          <span>目标名称</span>
+          <FormTextInput
+            v-model="cloneTargetName"
+            icon="i-ph-folder"
+            placeholder="例如 ruyi-feature"
+          >
+            <template #prefix><span class="sr-only">目标名称</span></template>
+          </FormTextInput>
+          <small><span class="i-ph-folder" />{{ cloneTargetPath }}</small>
+        </div>
+        <div class="field">
+          <span>开发分支名称</span>
+          <FormTextInput
+            v-model="cloneBranchName"
+            icon="i-ph-git-branch"
+            :disabled="cloneDevelopmentCount === 0"
+            placeholder="例如 feat/ruyi-feature"
+            @update:model-value="cloneBranchCustomized = true"
+          >
+            <template #prefix><span class="sr-only">开发分支名称</span></template>
+          </FormTextInput>
+          <small
+            ><span class="i-ph-git-branch" />{{
+              cloneDevelopmentCount
+                ? `${cloneDevelopmentCount} 个开发仓库使用此分支名`
+                : "所选仓库均为参考模式，不会新建分支"
+            }}</small
+          >
+        </div>
+        <div class="origin-note">
+          <span class="i-ph-git-branch-duotone" />
           <div>
-            <h2>克隆 Workspace</h2>
-            <p>选择仓库，创建独立工作区</p>
-          </div>
-          <button
-            class="icon-button"
-            type="button"
-            aria-label="关闭"
-            :disabled="busy"
-            @click="closeClone"
-          >
-            <span class="i-ph-x" />
-          </button>
-        </header>
-        <div class="modal-body">
-          <label class="field"
-            ><span>源 Workspace</span
-            ><button
-              class="select-trigger"
-              type="button"
-              :aria-expanded="cloneSourceOpen"
-              aria-haspopup="listbox"
-              @click="cloneSourceOpen = !cloneSourceOpen"
-            >
-              <span><span class="i-ph-folder" />{{ cloneSource?.name ?? "选择 Workspace" }}</span
-              ><span class="i-ph-caret-down" /></button
-          ></label>
-          <div v-if="cloneSourceOpen" class="select-popover">
-            <label class="search-control"
-              ><span class="i-ph-magnifying-glass" /><span class="sr-only">搜索源 Workspace</span
-              ><input v-model="cloneSourceQuery" type="search" placeholder="搜索 Workspace"
-            /></label>
-            <div role="listbox" aria-label="源 Workspace">
-              <button
-                v-for="workspace in filteredCloneSources"
-                :key="workspace.id"
-                type="button"
-                role="option"
-                :aria-selected="workspace.id === cloneSourceId"
-                @click="cloneSourceId = workspace.id"
-              >
-                <span class="i-ph-folder" />{{ workspace.name
-                }}<span v-if="workspace.id === cloneSourceId" class="i-ph-check" />
-              </button>
-              <p v-if="!filteredCloneSources.length" class="popover-empty">没有匹配的 Workspace</p>
-            </div>
-          </div>
-          <label class="field"
-            ><span>目标名称</span
-            ><input
-              id="clone-name"
-              v-model="cloneTargetName"
-              class="control"
-              required
-              autocomplete="off"
-              placeholder="例如 ruyi-feature"
-            /><small><span class="i-ph-folder" />{{ cloneTargetPath }}</small></label
-          >
-          <label class="field"
-            ><span>开发分支名称</span
-            ><input
-              v-model="cloneBranchName"
-              class="control"
-              :disabled="cloneDevelopmentCount === 0"
-              :required="cloneDevelopmentCount > 0"
-              autocomplete="off"
-              placeholder="例如 feat/ruyi-feature"
-              @input="cloneBranchCustomized = true"
-            /><small
-              ><span class="i-ph-git-branch" />{{
-                cloneDevelopmentCount
-                  ? `${cloneDevelopmentCount} 个开发仓库使用此分支名`
-                  : "所选仓库均为参考模式，不会新建分支"
-              }}</small
-            ></label
-          >
-          <div class="origin-note">
-            <span class="i-ph-git-branch-duotone" />
-            <div>
-              <strong>从远端默认分支创建</strong>
-              <p>开发仓库创建自定义分支；参考仓库使用 detached HEAD，不继承本地改动。</p>
-            </div>
-          </div>
-          <div class="repository-picker-heading">
-            <label for="clone-repository-search">选择仓库</label
-            ><span>已选 {{ cloneSelectedIds.length }} / {{ cloneSourceMembers.length }}</span>
-          </div>
-          <div class="picker-search-row">
-            <label class="search-control"
-              ><span class="i-ph-magnifying-glass" /><input
-                id="clone-repository-search"
-                v-model="cloneRepositoryQuery"
-                type="search"
-                placeholder="搜索仓库名称" /></label
-            ><button class="button" type="button" @click="toggleAllCloneRepositories">
-              {{ cloneSelectedIds.length === cloneSourceMembers.length ? "取消全选" : "全选" }}
-            </button>
-          </div>
-          <div class="repository-picker">
-            <div
-              v-for="{ member, repository } in filteredCloneMembers"
-              :key="member.repositoryId"
-              class="repository-picker-row"
-            >
-              <label class="repository-choice"
-                ><input
-                  type="checkbox"
-                  :checked="cloneSelectedIds.includes(member.repositoryId)"
-                  @change="toggleCloneRepository(member.repositoryId)"
-                /><span class="i-ph-git-branch" /><span class="repository-choice-copy"
-                  ><strong>{{ member.alias }}</strong
-                  ><code>{{ repository?.classificationPath }}</code></span
-                ></label
-              ><button
-                class="repository-mode"
-                :class="{ reference: cloneReferenceIds.includes(member.repositoryId) }"
-                type="button"
-                :disabled="!cloneSelectedIds.includes(member.repositoryId)"
-                :aria-pressed="cloneReferenceIds.includes(member.repositoryId)"
-                :aria-label="`${member.alias}：${
-                  cloneReferenceIds.includes(member.repositoryId) ? '仅作参考' : '创建开发分支'
-                }`"
-                @click="toggleCloneReference(member.repositoryId)"
-              >
-                <span
-                  :class="
-                    cloneReferenceIds.includes(member.repositoryId)
-                      ? 'i-ph-book-open-text'
-                      : 'i-ph-git-branch'
-                  "
-                />{{ cloneReferenceIds.includes(member.repositoryId) ? "仅作参考" : "开发分支" }}
-              </button>
-            </div>
-            <div v-if="!filteredCloneMembers.length" class="empty compact">没有匹配的仓库</div>
-          </div>
-          <div v-if="busyAction === '克隆 Workspace'" class="clone-progress" role="status">
-            <span class="spinner" /><span
-              ><strong>正在获取远端默认分支</strong
-              ><small>正在创建所选仓库的隔离 worktree…</small></span
-            >
-          </div>
-          <div v-if="cloneError" class="inline-error" role="alert">
-            <strong>克隆失败</strong>
-            <p>{{ cloneError }}</p>
+            <strong>优先跟踪远端同名分支</strong>
+            <p>同名分支不存在时从远端默认分支创建；参考仓库仍使用 detached HEAD。</p>
           </div>
         </div>
-        <footer>
+        <div class="repository-picker-heading">
+          <span>选择仓库</span>
+          <span>已选 {{ cloneSelectedIds.length }} / {{ cloneSourceMembers.length }}</span>
+        </div>
+        <div class="picker-search-row">
+          <FormTextInput
+            v-model="cloneRepositoryQuery"
+            type="search"
+            icon="i-ph-magnifying-glass"
+            clearable
+            placeholder="搜索仓库名称"
+          />
+          <ActionButton type="button" @click="toggleAllCloneRepositories">
+            {{ cloneSelectedIds.length === cloneSourceMembers.length ? "取消全选" : "全选" }}
+          </ActionButton>
+        </div>
+        <div class="repository-picker">
+          <div
+            v-for="{ member, repository } in filteredCloneMembers"
+            :key="member.repositoryId"
+            class="repository-picker-row"
+          >
+            <FormCheckbox
+              class="repository-choice"
+              :model-value="cloneSelectedIds.includes(member.repositoryId)"
+              @update:model-value="toggleCloneRepository(member.repositoryId)"
+            >
+              <span class="i-ph-git-branch" />
+              <span class="repository-choice-copy">
+                <strong>{{ member.alias }}</strong>
+                <code>{{ repository?.classificationPath }}</code>
+              </span>
+            </FormCheckbox>
+            <ActionButton
+              class="repository-mode"
+              type="button"
+              :class="{ reference: cloneReferenceIds.includes(member.repositoryId) }"
+              size="sm"
+              :icon="
+                cloneReferenceIds.includes(member.repositoryId)
+                  ? 'i-ph-book-open-text'
+                  : 'i-ph-git-branch'
+              "
+              :disabled="!cloneSelectedIds.includes(member.repositoryId)"
+              :aria-pressed="cloneReferenceIds.includes(member.repositoryId)"
+              :aria-label="`${member.alias}：${
+                cloneReferenceIds.includes(member.repositoryId) ? '仅作参考' : '创建开发分支'
+              }`"
+              @click="toggleCloneReference(member.repositoryId)"
+              >{{
+                cloneReferenceIds.includes(member.repositoryId) ? "仅作参考" : "开发分支"
+              }}</ActionButton
+            >
+          </div>
+          <div v-if="!filteredCloneMembers.length" class="empty compact">没有匹配的仓库</div>
+        </div>
+        <div v-if="busyAction === '克隆 Workspace'" class="clone-progress" role="status">
+          <span class="spinner" />
           <span
-            >{{ cloneDevelopmentCount }} 个开发分支 · {{ cloneReferenceIds.length }} 个仅参考</span
+            ><strong>正在获取远端默认分支</strong
+            ><small>正在创建所选仓库的隔离 worktree…</small></span
           >
-          <div>
-            <button class="button" type="button" :disabled="busy" @click="closeClone">取消</button
-            ><button class="button primary" type="submit" :disabled="!cloneCanSubmit">
-              <span v-if="busy" class="spinner small" />克隆 {{ cloneSelectedIds.length }} 个仓库
-            </button>
-          </div>
-        </footer>
-      </form>
-    </dialog>
-
-    <dialog ref="confirmDialog" class="modal confirm-modal" @close="restoreFocus">
-      <div v-if="confirmState" class="modal-card">
-        <header>
-          <h2>{{ confirmState.title }}</h2>
-          <button
-            class="icon-button"
-            type="button"
-            aria-label="关闭"
-            @click="confirmDialog?.close()"
-          >
-            <span class="i-ph-x" />
-          </button>
-        </header>
-        <div class="modal-body">
-          <p>{{ confirmState.message }}</p>
-          <div class="warning-note">
-            <span class="i-ph-warning" />{{
-              confirmState.warning ?? "未提交的改动会阻止删除，数据不会被强制丢弃。"
-            }}
-          </div>
         </div>
-        <footer>
-          <span />
-          <div>
-            <button class="button" type="button" @click="confirmDialog?.close()">取消</button
-            ><button
-              class="button"
-              :class="confirmState.action === 'convert-to-reference' ? 'primary' : 'danger'"
-              type="button"
-              @click="confirmAction"
-            >
-              {{ confirmState.confirmLabel ?? "确认删除" }}
-            </button>
-          </div>
-        </footer>
+        <div v-if="cloneError" class="inline-error" role="alert">
+          <strong>克隆失败</strong>
+          <p>{{ cloneError }}</p>
+        </div>
+      </form>
+      <template #footer>
+        <span class="modal-footer-note">
+          {{ cloneDevelopmentCount }} 个开发分支 · {{ cloneReferenceIds.length }} 个仅参考
+        </span>
+        <ActionButton :disabled="busy" @click="closeClone">取消</ActionButton>
+        <ActionButton
+          variant="primary"
+          type="submit"
+          form="clone-form"
+          :loading="busyAction === '克隆 Workspace'"
+          :disabled="!cloneCanSubmit"
+          >克隆 {{ cloneSelectedIds.length }} 个仓库</ActionButton
+        >
+      </template>
+    </OverlayModal>
+
+    <OverlayModal v-if="confirmState" v-model:open="confirmOpen" :title="confirmState.title">
+      <div class="confirm-copy">
+        <p>{{ confirmState.message }}</p>
+        <div class="warning-note">
+          <span class="i-ph-warning" />{{
+            confirmState.warning ?? "未提交的改动会阻止删除，数据不会被强制丢弃。"
+          }}
+        </div>
       </div>
-    </dialog>
+      <template #footer>
+        <ActionButton @click="confirmOpen = false">取消</ActionButton>
+        <ActionButton
+          :variant="confirmState.action === 'convert-to-reference' ? 'primary' : 'action'"
+          :class="{ 'danger-action': confirmState.action !== 'convert-to-reference' }"
+          :loading="busy"
+          @click="confirmAction"
+          >{{ confirmState.confirmLabel ?? "确认删除" }}</ActionButton
+        >
+      </template>
+    </OverlayModal>
   </div>
 </template>

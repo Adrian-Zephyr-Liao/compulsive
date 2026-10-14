@@ -5,16 +5,17 @@ import {
   mkdir,
   readFile,
   readlink,
-  readdir,
   realpath,
   rename,
+  rm,
   rmdir,
   stat,
   symlink,
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { CompulsiveError } from "./errors.js";
 import { runGit } from "./git.js";
@@ -391,14 +392,15 @@ async function addGitWorktree(
   worktreePath: string,
   branch: string,
   createBranch: boolean,
-  upstream?: string,
   startPoint?: string,
   detached = false,
+  track = false,
 ): Promise<void> {
   const arguments_ = ["-C", repositoryPath, "worktree", "add"];
   if (detached) {
     arguments_.push("--detach", "--", worktreePath, startPoint ?? branch);
   } else if (createBranch) {
+    if (track) arguments_.push("--track");
     arguments_.push("-b", branch, "--", worktreePath);
     if (startPoint) arguments_.push(startPoint);
   } else arguments_.push("--", worktreePath, branch);
@@ -406,9 +408,6 @@ async function addGitWorktree(
   try {
     await runGit(arguments_);
     added = true;
-    if (createBranch && upstream) {
-      await runGit(["branch", "--set-upstream-to", upstream, branch], { cwd: worktreePath });
-    }
   } catch (error) {
     if (added) {
       await removeGitWorktree(repositoryPath, worktreePath).catch(() => undefined);
@@ -597,6 +596,19 @@ async function originBranch(
   return remoteBranch;
 }
 
+async function fetchConfiguredOriginBranch(
+  repositoryPath: string,
+  branch: string,
+): Promise<string | undefined> {
+  const origin = await runGit(["config", "--get", "remote.origin.url"], {
+    cwd: repositoryPath,
+    allowFailure: true,
+  });
+  return origin.exitCode === 0 && origin.stdout
+    ? originBranch(repositoryPath, branch, true)
+    : undefined;
+}
+
 export async function addWorkspaceMember(
   paths: StoragePaths,
   input: AddWorkspaceMemberInput,
@@ -661,18 +673,18 @@ export async function addWorkspaceMember(
     }
     await ensureManagedWorktreeRoot(repository.absolutePath);
     const createBranch = !detached && (explicitBranch === undefined || input.createBranch === true);
-    if (createBranch) createdBranch = branch;
-    const upstream = createBranch
-      ? (startPoint ?? (await currentUpstream(repository.absolutePath)))
+    const remoteBranch = createBranch
+      ? await fetchConfiguredOriginBranch(repository.absolutePath, branch)
       : undefined;
+    if (createBranch) createdBranch = branch;
     await addGitWorktree(
       repository.absolutePath,
       worktreePath,
       branch,
       createBranch,
-      upstream,
-      startPoint,
+      remoteBranch ?? startPoint,
       detached,
+      remoteBranch !== undefined,
     );
     try {
       await verifyManagedWorktree(worktreePath, repository.absolutePath, branch, detached);
@@ -943,7 +955,6 @@ export async function removeWorkspaceMember(
           member.worktreePath,
           member.branch,
           false,
-          undefined,
           member.branch,
           member.detached,
         );
@@ -983,11 +994,12 @@ export async function promoteWorkspaceReference(
     throw new CompulsiveError("NOT_FOUND", "Repository is not a member of this workspace.");
   }
   const member = workspace.members[memberIndex]!;
-  if (member.mode !== "worktree" || !member.detached) {
-    throw new CompulsiveError("CONFLICT", "Workspace member is not a reference worktree.");
+  if (member.mode !== "worktree") {
+    throw new CompulsiveError("CONFLICT", "Workspace member is not a managed worktree.");
   }
   const repository = findRepository(repositoryRegistry.repositories, member.repositoryId);
   await verifyWorkspaceWorktree(workspace, member, repository.absolutePath);
+  if (!member.detached) await assertCleanWorktree(member.worktreePath);
   const validBranch = await runGit(["check-ref-format", "--branch", branch], {
     cwd: repository.absolutePath,
     allowFailure: true,
@@ -1000,27 +1012,30 @@ export async function promoteWorkspaceReference(
     allowFailure: true,
   });
   const createdBranch = existingBranch.exitCode !== 0;
+  const remoteBranch = createdBranch
+    ? await fetchConfiguredOriginBranch(repository.absolutePath, branch)
+    : undefined;
   const originalCommit = (await runGit(["rev-parse", "HEAD"], { cwd: member.worktreePath })).stdout;
   const rollback = async () => {
-    await runGit(["switch", "--detach", originalCommit], { cwd: member.worktreePath });
+    await runGit(
+      member.detached
+        ? ["switch", "--detach", originalCommit]
+        : ["switch", "--ignore-other-worktrees", member.branch],
+      { cwd: member.worktreePath },
+    );
     if (createdBranch) {
       await runGit(["branch", "-D", "--", branch], { cwd: repository.absolutePath });
     }
   };
   try {
     await runGit(
-      createdBranch ? ["switch", "-c", branch] : ["switch", "--ignore-other-worktrees", branch],
+      createdBranch
+        ? remoteBranch
+          ? ["switch", "--track", "-c", branch, remoteBranch]
+          : ["switch", "-c", branch]
+        : ["switch", "--ignore-other-worktrees", branch],
       { cwd: member.worktreePath },
     );
-    const upstream = await runGit(["rev-parse", "--verify", `${member.branch}^{commit}`], {
-      cwd: repository.absolutePath,
-      allowFailure: true,
-    });
-    if (upstream.exitCode === 0) {
-      await runGit(["branch", "--set-upstream-to", member.branch, branch], {
-        cwd: member.worktreePath,
-      });
-    }
     await verifyManagedWorktree(member.worktreePath, repository.absolutePath, branch);
   } catch (error) {
     await rollback().catch(() => undefined);
@@ -1123,7 +1138,7 @@ export async function convertWorkspaceToReference(
   return updated;
 }
 
-async function getDevelopmentWorktree(
+async function getCleanWorkspaceWorktree(
   paths: StoragePaths,
   input: WorkspaceGitActionInput,
 ): Promise<{
@@ -1138,8 +1153,8 @@ async function getDevelopmentWorktree(
   const member = workspace.members.find(({ repositoryId }) => repositoryId === input.repositoryId);
   if (!member)
     throw new CompulsiveError("NOT_FOUND", "Repository is not a member of this workspace.");
-  if (member.mode !== "worktree" || member.detached) {
-    throw new CompulsiveError("CONFLICT", "Workspace member is not a development worktree.");
+  if (member.mode !== "worktree") {
+    throw new CompulsiveError("CONFLICT", "Workspace member is not a managed worktree.");
   }
   const repository = findRepository(repositoryRegistry.repositories, member.repositoryId);
   await verifyWorkspaceWorktree(workspace, member, repository.absolutePath);
@@ -1151,16 +1166,21 @@ export async function rebaseWorkspaceMember(
   paths: StoragePaths,
   input: WorkspaceGitActionInput,
 ): Promise<void> {
-  const { member, repository } = await getDevelopmentWorktree(paths, input);
+  const { member, repository } = await getCleanWorkspaceWorktree(paths, input);
   const remoteBranch = await fetchOriginDefaultBranch(repository.absolutePath);
-  await runGit(["rebase", remoteBranch], { cwd: member.worktreePath });
+  await runGit(member.detached ? ["switch", "--detach", remoteBranch] : ["rebase", remoteBranch], {
+    cwd: member.worktreePath,
+  });
 }
 
 export async function pushWorkspaceMember(
   paths: StoragePaths,
   input: WorkspaceGitActionInput,
 ): Promise<void> {
-  const { member, repository } = await getDevelopmentWorktree(paths, input);
+  const { member, repository } = await getCleanWorkspaceWorktree(paths, input);
+  if (member.detached) {
+    throw new CompulsiveError("CONFLICT", "Workspace member is not a development worktree.");
+  }
   const remoteBranch = await originBranch(repository.absolutePath, member.branch, true);
   if (remoteBranch) await runGit(["rebase", remoteBranch], { cwd: member.worktreePath });
   await runGit(["push", "-u", "origin", `HEAD:refs/heads/${member.branch}`], {
@@ -1199,6 +1219,7 @@ export async function getWorkspaceStatus(
             : undefined;
         const upstream = pushBranch ?? (await currentUpstream(path));
         let unpushed: number | undefined;
+        let mergedIntoDefault: boolean | undefined;
         let comparisonError: string | undefined;
         if (defaultBranch) {
           const comparison = await runGit(
@@ -1217,6 +1238,13 @@ export async function getWorkspaceStatus(
           });
           if (pendingPush.exitCode === 0) unpushed = Number(pendingPush.stdout);
         }
+        if (defaultBranch && pushBranch && pushBranch !== defaultBranch) {
+          const merged = await runGit(["merge-base", "--is-ancestor", pushBranch, defaultBranch], {
+            cwd: path,
+            allowFailure: true,
+          });
+          if (merged.exitCode <= 1) mergedIntoDefault = merged.exitCode === 0;
+        }
         return {
           repositoryId: member.repositoryId,
           branch: currentBranch.stdout || (member.mode === "worktree" ? member.branch : "detached"),
@@ -1226,6 +1254,7 @@ export async function getWorkspaceStatus(
           ...(behind === undefined ? {} : { behind }),
           ...(upstream ? { upstream } : {}),
           ...(unpushed === undefined ? {} : { unpushed }),
+          ...(mergedIntoDefault === undefined ? {} : { mergedIntoDefault }),
           changes: status.stdout ? status.stdout.split("\n") : [],
           conflicts: conflicts.stdout ? conflicts.stdout.split("\n") : [],
           ...(comparisonError ? { comparisonError } : {}),
@@ -1536,11 +1565,34 @@ export async function migrateWorkspaces(
 }
 
 export async function deleteWorkspace(paths: StoragePaths, id: WorkspaceId): Promise<void> {
-  const [workspaceRegistry, repositoryRegistry] = await Promise.all([
+  const [config, workspaceRegistry, repositoryRegistry] = await Promise.all([
+    readConfig(paths.config),
     readWorkspaceRegistry(paths.workspaces),
     readRegistry(paths.registry),
   ]);
   const { index, workspace } = findWorkspace(workspaceRegistry, id);
+  const workspacePath = resolve(workspace.absolutePath);
+  if (
+    workspacePath === dirname(workspacePath) ||
+    [homedir(), config.rootDir, config.workspaceRoot].some(
+      (protectedPath) => workspacePath === resolve(protectedPath),
+    )
+  ) {
+    throw new CompulsiveError(
+      "CONFLICT",
+      `Refusing to delete a protected Workspace path: ${workspacePath}`,
+    );
+  }
+  const nestedWorkspace = workspaceRegistry.workspaces.find(
+    (candidate) =>
+      candidate.id !== workspace.id && pathContains(workspacePath, candidate.absolutePath),
+  );
+  if (nestedWorkspace) {
+    throw new CompulsiveError(
+      "CONFLICT",
+      `Workspace contains another registered Workspace: ${nestedWorkspace.name}`,
+    );
+  }
   const links: Array<{ path: string; target: string }> = [];
   const worktrees: Array<{
     memberPath: string;
@@ -1572,6 +1624,8 @@ export async function deleteWorkspace(paths: StoragePaths, id: WorkspaceId): Pro
 
   const removed: Array<{ path: string; target: string }> = [];
   const removedWorktrees: typeof worktrees = [];
+  const deletionPath = `${workspacePath}.cpl-deleting-${randomUUID()}`;
+  let moved = false;
   try {
     for (const link of links) {
       await unlinkExpectedLink(link.path, link.target);
@@ -1587,10 +1641,13 @@ export async function deleteWorkspace(paths: StoragePaths, id: WorkspaceId): Pro
       }
       removedWorktrees.push(worktree);
     }
+    await rename(workspacePath, deletionPath);
+    moved = true;
     workspaceRegistry.workspaces.splice(index, 1);
     await writeJsonAtomic(paths.workspaces, workspaceRegistry);
   } catch (error) {
     const rollbackErrors = await runRollbacks([
+      ...(moved ? [() => rename(deletionPath, workspacePath)] : []),
       ...removed.map((link) => () => symlink(link.target, link.path)),
       ...removedWorktrees.map((worktree) => async () => {
         await addGitWorktree(
@@ -1598,7 +1655,6 @@ export async function deleteWorkspace(paths: StoragePaths, id: WorkspaceId): Pro
           worktree.path,
           worktree.branch,
           false,
-          undefined,
           worktree.branch,
           worktree.detached,
         );
@@ -1614,13 +1670,14 @@ export async function deleteWorkspace(paths: StoragePaths, id: WorkspaceId): Pro
     }
     throw error;
   }
-
-  const entries = await readdir(workspace.absolutePath);
-  if (entries.length === 1 && entries[0] === ".DS_Store") {
-    await unlink(join(workspace.absolutePath, ".DS_Store"));
-    await rmdir(workspace.absolutePath);
-  } else if (entries.length === 0) {
-    await rmdir(workspace.absolutePath);
+  try {
+    await rm(deletionPath, { recursive: true });
+  } catch (error) {
+    throw new CompulsiveError(
+      "FILESYSTEM_FAILED",
+      `Workspace was unregistered but its directory could not be deleted: ${deletionPath}`,
+      { cause: error },
+    );
   }
   try {
     const statusRegistry = await readWorkspaceStatusRegistry(paths.workspaceStatuses);

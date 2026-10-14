@@ -134,9 +134,10 @@ cpl workspace add Product worker --branch feature/product-worker --create-branch
 ```
 
 The physical worktree is stored at `<canonical-repository>/.worktrees/<workspace>`. The Workspace
-member is an absolute symbolic link to it. A newly created branch inherits the canonical checkout's
-upstream when one is configured. Migration applies the same rule only to legacy branches that have
-no upstream.
+member is an absolute symbolic link to it. With `--create-branch`, Compulsive fetches and tracks an
+existing same-name branch on `origin`; otherwise it creates a local branch without an upstream from
+the requested start point or current commit. Migration only inherits an upstream for legacy branches
+that do not already have one.
 
 Common maintenance commands:
 
@@ -147,8 +148,10 @@ cpl workspace remove Product api --yes
 cpl workspace delete Product --yes
 ```
 
-Workspace removal deletes only exact Compulsive-managed links or clean worktrees. It never deletes
-the canonical repository or unrelated files inside a Workspace.
+`workspace remove` deletes only the selected Compulsive-managed link or clean worktree.
+`workspace delete` permanently deletes the entire registered Workspace directory after verifying
+that managed worktrees are clean. Neither command deletes canonical repositories. Protected paths,
+dirty worktrees, and nested registered Workspaces block deletion.
 
 ## Configuration
 

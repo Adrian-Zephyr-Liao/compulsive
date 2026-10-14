@@ -231,6 +231,7 @@ function isWorkspaceMemberStatus(value: unknown): boolean {
     (status.behind === undefined || typeof status.behind === "number") &&
     (status.upstream === undefined || typeof status.upstream === "string") &&
     (status.unpushed === undefined || typeof status.unpushed === "number") &&
+    (status.mergedIntoDefault === undefined || typeof status.mergedIntoDefault === "boolean") &&
     Array.isArray(status.changes) &&
     status.changes.every((change) => typeof change === "string") &&
     Array.isArray(status.conflicts) &&

@@ -180,6 +180,7 @@ export interface WorkspaceMemberStatus {
   behind?: number;
   upstream?: string;
   unpushed?: number;
+  mergedIntoDefault?: boolean;
   changes: string[];
   conflicts: string[];
   comparisonError?: string;

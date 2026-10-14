@@ -164,6 +164,20 @@ export function createServerFunctions(manager: RepositoryManager) {
       }),
   });
 
+  const switchWorkspaceMemberBranch = defineRpcFunction({
+    name: "switch-workspace-member-branch",
+    type: "action",
+    jsonSerializable: true,
+    args: [s.object({ workspaceId: s.string(), repositoryId: s.string(), branch: s.string() })],
+    returns: objectResult<WorkspaceRecord>(),
+    handler: ({ workspaceId, repositoryId, branch }) =>
+      manager.promoteWorkspaceReference({
+        workspaceId: workspaceId as WorkspaceId,
+        repositoryId: repositoryId as RepositoryId,
+        branch,
+      }),
+  });
+
   const convertWorkspaceToReference = defineRpcFunction({
     name: "convert-workspace-to-reference",
     type: "action",
@@ -285,6 +299,7 @@ export function createServerFunctions(manager: RepositoryManager) {
     addWorkspaceMember,
     removeWorkspaceMember,
     promoteWorkspaceReference,
+    switchWorkspaceMemberBranch,
     convertWorkspaceToReference,
     rebaseWorkspaceMember,
     pushWorkspaceMember,

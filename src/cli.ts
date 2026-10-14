@@ -753,7 +753,9 @@ async function handleWorkspace(
           "Use --yes to delete a workspace non-interactively.",
         );
       }
-      const confirmed = await context.confirm(`Delete workspace ${workspace.name}?`);
+      const confirmed = await context.confirm(
+        `Permanently delete workspace ${workspace.name} and its entire directory?`,
+      );
       if (!confirmed) throw new CliCancelled();
     }
     await context.manager.deleteWorkspace(workspace.id);

@@ -10,6 +10,7 @@ describe("devtool rpc", () => {
     expect(names).toContain("clone-workspace");
     expect(names).toContain("open-workspace-in-chatgpt");
     expect(names).toContain("promote-workspace-reference");
+    expect(names).toContain("switch-workspace-member-branch");
     expect(names).toContain("convert-workspace-to-reference");
     expect(names).toContain("rebase-workspace-member");
     expect(names).toContain("push-workspace-member");

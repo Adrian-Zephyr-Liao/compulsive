@@ -296,7 +296,7 @@ describe("workspace state", () => {
     await expect(access(join(repositoryPath, ".git"))).resolves.toBeUndefined();
   });
 
-  it("deletes managed links but preserves unrelated workspace files and the directory", async () => {
+  it("deletes the workspace directory while preserving the canonical repository", async () => {
     const repositoryPath = join(sandbox, "repositories", "preserved");
     await execFileAsync("git", ["init", "-q", repositoryPath]);
     const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
@@ -312,10 +312,22 @@ describe("workspace state", () => {
     await manager.deleteWorkspace(workspace.id);
 
     await expect(manager.searchWorkspaces()).resolves.toEqual([]);
-    await expect(readFile(join(workspace.absolutePath, "notes.md"), "utf8")).resolves.toBe(
-      "keep this\n",
-    );
+    await expect(access(workspace.absolutePath)).rejects.toThrow();
     await expect(access(join(repositoryPath, ".git"))).resolves.toBeUndefined();
+  });
+
+  it("refuses to delete a workspace that contains another registered workspace", async () => {
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const parent = await manager.createWorkspace({ name: "Parent" });
+    const child = await manager.createWorkspace({
+      name: "Child",
+      path: join(parent.absolutePath, "child"),
+    });
+
+    await expect(manager.deleteWorkspace(parent.id)).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(access(child.absolutePath)).resolves.toBeUndefined();
+    await expect(manager.searchWorkspaces()).resolves.toHaveLength(2);
   });
 
   it("refuses to remove an unexpected link and preserves workspace metadata", async () => {
@@ -417,7 +429,7 @@ describe("workspace state", () => {
     );
   });
 
-  it("creates the exact requested branch only with explicit authorization", async () => {
+  it("tracks an existing remote branch when explicitly creating a worktree branch", async () => {
     const remotePath = join(sandbox, "remote.git");
     const repositoryPath = join(sandbox, "repositories", "new-branch");
     await execFileAsync("git", ["init", "-q", "--bare", "-b", "main", remotePath]);
@@ -428,6 +440,14 @@ describe("workspace state", () => {
     await execFileAsync("git", ["-C", repositoryPath, "add", "README.md"]);
     await execFileAsync("git", ["-C", repositoryPath, "commit", "-q", "-m", "initial"]);
     await execFileAsync("git", ["-C", repositoryPath, "push", "-q", "-u", "origin", "main"]);
+    await execFileAsync("git", [
+      "-C",
+      repositoryPath,
+      "push",
+      "-q",
+      "origin",
+      "main:refs/heads/feature/exact-name",
+    ]);
     const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
     await manager.initialize();
     const repository = await manager.register({ path: repositoryPath });
@@ -457,13 +477,12 @@ describe("workspace state", () => {
         await execFileAsync("git", [
           "-C",
           join(workspace.absolutePath, repository.name),
-          "rev-parse",
-          "--abbrev-ref",
-          "--symbolic-full-name",
-          "@{upstream}",
+          "for-each-ref",
+          "--format=%(upstream:short)",
+          "refs/heads/feature/exact-name",
         ])
       ).stdout.trim(),
-    ).toBe("origin/main");
+    ).toBe("origin/feature/exact-name");
   });
 
   it("clones only selected members from the remote default branch instead of canonical HEAD", async () => {
@@ -565,6 +584,22 @@ describe("workspace state", () => {
     expect(referenceBranch.stdout.trim()).toBe("");
     expect(unexpectedBranch.stdout.trim()).toBe("");
 
+    await writeFile(join(selectedMainPath, "reference-update.txt"), "reference update\n");
+    await execFileAsync("git", ["-C", selectedMainPath, "add", "reference-update.txt"]);
+    await execFileAsync("git", ["-C", selectedMainPath, "commit", "-q", "-m", "reference update"]);
+    await execFileAsync("git", ["-C", selectedMainPath, "push", "-q", "origin", "main"]);
+    await manager.rebaseWorkspaceMember({
+      workspaceId: cloned.id,
+      repositoryId: selectedMainRepository.id,
+    });
+    const [updatedReferenceHead, updatedRemoteMain, updatedReferenceBranch] = await Promise.all([
+      execFileAsync("git", ["-C", clonedMainPath, "rev-parse", "HEAD"]),
+      execFileAsync("git", ["-C", selectedMainPath, "rev-parse", "origin/main"]),
+      execFileAsync("git", ["-C", clonedMainPath, "branch", "--show-current"]),
+    ]);
+    expect(updatedReferenceHead.stdout.trim()).toBe(updatedRemoteMain.stdout.trim());
+    expect(updatedReferenceBranch.stdout.trim()).toBe("");
+
     await writeFile(join(clonedMainPath, "draft.txt"), "local draft\n");
     const referenceStatus = await manager.getWorkspaceStatus(cloned.id);
     expect(
@@ -593,14 +628,13 @@ describe("workspace state", () => {
       execFileAsync("git", [
         "-C",
         clonedMainPath,
-        "rev-parse",
-        "--abbrev-ref",
-        "--symbolic-full-name",
-        "@{upstream}",
+        "for-each-ref",
+        "--format=%(upstream:short)",
+        "refs/heads/feat/promoted-reference",
       ]),
     ]);
     expect(promotedBranch.stdout.trim()).toBe("feat/promoted-reference");
-    expect(promotedUpstream.stdout.trim()).toBe("origin/main");
+    expect(promotedUpstream.stdout.trim()).toBe("");
 
     await writeFile(join(selectedMainPath, "upstream.txt"), "new upstream commit\n");
     await execFileAsync("git", ["-C", selectedMainPath, "add", "upstream.txt"]);
@@ -632,16 +666,17 @@ describe("workspace state", () => {
     await execFileAsync("git", ["-C", clonedMainPath, "add", "feature.txt"]);
     await execFileAsync("git", ["-C", clonedMainPath, "commit", "-q", "-m", "feature"]);
     const rebasedStatus = await manager.getWorkspaceStatus(cloned.id);
-    expect(
-      rebasedStatus.members.find((status) => status.repositoryId === selectedMainRepository.id),
-    ).toMatchObject({
+    const rebasedMemberStatus = rebasedStatus.members.find(
+      (status) => status.repositoryId === selectedMainRepository.id,
+    );
+    expect(rebasedMemberStatus).toMatchObject({
       branch: "feat/promoted-reference",
-      upstream: "origin/main",
       ahead: 1,
       behind: 0,
-      unpushed: 1,
       changes: [],
     });
+    expect(rebasedMemberStatus).not.toHaveProperty("upstream");
+    expect(rebasedMemberStatus).not.toHaveProperty("unpushed");
     await manager.pushWorkspaceMember({
       workspaceId: cloned.id,
       repositoryId: selectedMainRepository.id,
@@ -652,6 +687,27 @@ describe("workspace state", () => {
     ).toMatchObject({
       upstream: "origin/feat/promoted-reference",
       unpushed: 0,
+      mergedIntoDefault: false,
+    });
+
+    await execFileAsync("git", ["-C", selectedMainPath, "fetch", "-q", "origin"]);
+    await execFileAsync("git", [
+      "-C",
+      selectedMainPath,
+      "merge",
+      "-q",
+      "--no-ff",
+      "origin/feat/promoted-reference",
+      "-m",
+      "merge feature",
+    ]);
+    await execFileAsync("git", ["-C", selectedMainPath, "push", "-q", "origin", "main"]);
+    const mergedStatus = await manager.getWorkspaceStatus(cloned.id, true);
+    expect(
+      mergedStatus.members.find((status) => status.repositoryId === selectedMainRepository.id),
+    ).toMatchObject({
+      upstream: "origin/feat/promoted-reference",
+      mergedIntoDefault: true,
     });
 
     await writeFile(join(clonedMainPath, "local-next.txt"), "local next\n");
@@ -716,6 +772,7 @@ describe("workspace state", () => {
     ]);
     expect(convertedBranch.stdout.trim()).toBe("");
     expect(preservedDevelopmentBranch.stdout.trim()).not.toBe("");
+    await execFileAsync("git", ["-C", selectedMainPath, "branch", "-D", "feat/promoted-reference"]);
 
     const switchedToExistingMain = await manager.promoteWorkspaceReference({
       workspaceId: cloned.id,
@@ -737,6 +794,27 @@ describe("workspace state", () => {
       ahead: 0,
       behind: 0,
     });
+    const switchedDevelopmentBranch = await manager.promoteWorkspaceReference({
+      workspaceId: cloned.id,
+      repositoryId: selectedMainRepository.id,
+      branch: "feat/promoted-reference",
+    });
+    expect(switchedDevelopmentBranch.members[1]).toMatchObject({
+      branch: "feat/promoted-reference",
+      mode: "worktree",
+    });
+    await expect(
+      execFileAsync("git", ["-C", clonedMainPath, "branch", "--show-current"]),
+    ).resolves.toMatchObject({ stdout: "feat/promoted-reference\n" });
+    await expect(
+      execFileAsync("git", [
+        "-C",
+        clonedMainPath,
+        "for-each-ref",
+        "--format=%(upstream:short)",
+        "refs/heads/feat/promoted-reference",
+      ]),
+    ).resolves.toMatchObject({ stdout: "origin/feat/promoted-reference\n" });
     await expect(
       manager.cloneWorkspace({
         sourceWorkspaceId: source.id,

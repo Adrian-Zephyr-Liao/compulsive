@@ -142,8 +142,8 @@ cpl workspace add Product worker \
 ```
 
 实体 worktree 保存在 `<canonical-repository>/.worktrees/<workspace>`，Workspace 成员只是指向
-它的绝对软链接。使用 `--create-branch` 时，如果源仓库当前分支配置了 upstream，新分支会继承
-该 upstream。
+它的绝对软链接。使用 `--create-branch` 时，如果 `origin` 已有同名分支，Compulsive 会先获取
+并跟踪该分支；否则才从指定起点或当前提交创建不带 upstream 的本地分支。
 
 常用维护命令：
 
@@ -154,9 +154,10 @@ cpl workspace remove Product api --yes
 cpl workspace delete Product --yes
 ```
 
-`workspace remove` 和 `workspace delete` 只删除由 Compulsive 管理的精确链接或干净 worktree，
-绝不删除 canonical 仓库。脏 worktree、意外文件、目录或被替换的链接都会阻止操作；
-Workspace 中无关的用户文件会原样保留。`workspace` 可以缩写为 `ws`。
+`workspace remove` 只删除选中的 Compulsive 管理链接或干净 worktree；`workspace delete`
+会在确认所有托管 worktree 干净后，永久删除整个已注册 Workspace 目录。两者都不会删除
+canonical 仓库；受保护路径、脏 worktree 和嵌套注册的 Workspace 会阻止删除。
+`workspace` 可以缩写为 `ws`。
 旧版本直接建在 Workspace 下的 worktree 可用 `workspace migrate` 原位迁移；命令保留未提交
 修改，并在成功移动后把旧路径替换为软链接。旧分支没有 upstream 时，会继承源仓库当前分支的
 upstream；已经配置过的不会改动。

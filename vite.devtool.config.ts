@@ -8,6 +8,7 @@ export default defineConfig({
   base: "./",
   root: fileURLToPath(new URL("./src/devtool-client", import.meta.url)),
   plugins: [vue(), UnoCSS()],
+  optimizeDeps: { exclude: ["@antfu/design"] },
   build: {
     outDir: fileURLToPath(new URL("./dist/devtool-client", import.meta.url)),
     emptyOutDir: false,
