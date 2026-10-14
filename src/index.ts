@@ -25,6 +25,8 @@ export type {
   SearchWorkspacesInput,
   UpdateConfigInput,
   WorkspaceId,
+  WorkspaceBranchSyncItem,
+  WorkspaceBranchSyncResult,
   WorkspaceMember,
   WorkspaceMemberMode,
   WorkspaceMigrationResult,

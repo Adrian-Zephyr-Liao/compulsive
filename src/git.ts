@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import { CompulsiveError } from "./errors.js";
@@ -35,6 +36,28 @@ export async function runGit(
       redactGitError(failure.stderr?.trim() || failure.message),
     );
   }
+}
+
+export async function readWorktreeBranch(
+  worktreePath: string,
+): Promise<{ branch: string; rebasing: boolean }> {
+  const current = await runGit(["branch", "--show-current"], { cwd: worktreePath });
+  if (current.stdout) return { branch: current.stdout, rebasing: false };
+
+  for (const rebaseDirectory of ["rebase-merge", "rebase-apply"]) {
+    const gitPath = await runGit(["rev-parse", "--git-path", `${rebaseDirectory}/head-name`], {
+      cwd: worktreePath,
+    });
+    const headName = await readFile(
+      isAbsolute(gitPath.stdout) ? gitPath.stdout : resolve(worktreePath, gitPath.stdout),
+      "utf8",
+    ).catch(() => "");
+    if (headName.startsWith("refs/heads/")) {
+      return { branch: headName.trim().slice("refs/heads/".length), rebasing: true };
+    }
+  }
+
+  return { branch: "", rebasing: false };
 }
 
 export async function findRepositoryRoot(inputPath: string): Promise<string> {

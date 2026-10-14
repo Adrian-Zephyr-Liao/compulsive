@@ -18,7 +18,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { CompulsiveError } from "./errors.js";
-import { runGit } from "./git.js";
+import { readWorktreeBranch, runGit } from "./git.js";
 import {
   fileExists,
   readConfig,
@@ -38,6 +38,8 @@ import type {
   RepositoryRecord,
   SearchWorkspacesInput,
   WorkspaceId,
+  WorkspaceBranchSyncItem,
+  WorkspaceBranchSyncResult,
   WorkspaceGitActionInput,
   WorkspaceMember,
   WorkspaceMigrationResult,
@@ -335,12 +337,12 @@ async function verifyManagedWorktree(
       runGit(["rev-parse", "--show-toplevel"], { cwd: worktreePath }),
       gitCommonDirectory(worktreePath),
       gitCommonDirectory(repositoryPath),
-      runGit(["branch", "--show-current"], { cwd: worktreePath }),
+      readWorktreeBranch(worktreePath),
     ]);
     if (
       (await realpath(memberRoot.stdout)) !== (await realpath(worktreePath)) ||
       memberCommon !== repositoryCommon ||
-      currentBranch.stdout !== (detached ? "" : branch)
+      currentBranch.branch !== (detached ? "" : branch)
     ) {
       throw new CompulsiveError(
         "CONFLICT",
@@ -1188,6 +1190,105 @@ export async function pushWorkspaceMember(
   });
 }
 
+export async function syncWorkspaceBranches(
+  paths: StoragePaths,
+  id: WorkspaceId,
+): Promise<WorkspaceBranchSyncResult> {
+  const workspaceRegistry = await readWorkspaceRegistry(paths.workspaces);
+  const { workspace } = findWorkspace(workspaceRegistry, id);
+  const items: WorkspaceBranchSyncItem[] = [];
+
+  for (const member of workspace.members) {
+    if (member.mode !== "worktree") {
+      items.push({
+        repositoryId: member.repositoryId,
+        alias: member.alias,
+        outcome: "skipped",
+        message: "目录链接不参与分支同步。",
+      });
+      continue;
+    }
+
+    try {
+      const { member: worktree, repository } = await getCleanWorkspaceWorktree(paths, {
+        workspaceId: workspace.id,
+        repositoryId: member.repositoryId,
+      });
+      const defaultBranch = await fetchOriginDefaultBranch(repository.absolutePath);
+      if (worktree.detached) {
+        await runGit(["switch", "--detach", defaultBranch], { cwd: worktree.worktreePath });
+        items.push({
+          repositoryId: member.repositoryId,
+          alias: member.alias,
+          outcome: "synced",
+          message: `参考代码已更新到 ${defaultBranch}。`,
+        });
+        continue;
+      }
+
+      const remoteBranch = await originBranch(repository.absolutePath, worktree.branch, true);
+      if (remoteBranch && remoteBranch !== defaultBranch) {
+        const [merged, unpushed] = await Promise.all([
+          runGit(["merge-base", "--is-ancestor", remoteBranch, defaultBranch], {
+            cwd: worktree.worktreePath,
+            allowFailure: true,
+          }),
+          runGit(["rev-list", "--count", `${remoteBranch}..HEAD`], {
+            cwd: worktree.worktreePath,
+          }),
+        ]);
+        if (merged.exitCode === 0 && Number(unpushed.stdout) === 0) {
+          items.push({
+            repositoryId: member.repositoryId,
+            alias: member.alias,
+            outcome: "skipped",
+            message: "远端开发分支已合入主分支。",
+          });
+          continue;
+        }
+      }
+      if (remoteBranch) {
+        await runGit(["merge", "--no-edit", remoteBranch], { cwd: worktree.worktreePath });
+      }
+      if (defaultBranch !== remoteBranch) {
+        await runGit(["merge", "--no-edit", defaultBranch], { cwd: worktree.worktreePath });
+      }
+      await runGit(["push", "-u", "origin", `HEAD:refs/heads/${worktree.branch}`], {
+        cwd: worktree.worktreePath,
+      });
+      items.push({
+        repositoryId: member.repositoryId,
+        alias: member.alias,
+        outcome: "synced",
+        message: `已合并 ${defaultBranch} 并推送 ${worktree.branch}。`,
+      });
+    } catch (error) {
+      const conflicts = await runGit(["diff", "--name-only", "--diff-filter=U", "--"], {
+        cwd: member.worktreePath,
+        allowFailure: true,
+      });
+      const dirty =
+        error instanceof CompulsiveError &&
+        error.code === "CONFLICT" &&
+        error.message.startsWith("Git worktree has uncommitted changes:");
+      items.push({
+        repositoryId: member.repositoryId,
+        alias: member.alias,
+        outcome: conflicts.stdout ? "conflict" : dirty ? "skipped" : "failed",
+        message: conflicts.stdout
+          ? `合并产生冲突：${conflicts.stdout.split("\n").join("、")}`
+          : dirty
+            ? "存在未提交变更，已跳过。"
+            : error instanceof Error
+              ? error.message
+              : String(error),
+      });
+    }
+  }
+
+  return { workspaceId: workspace.id, items };
+}
+
 export async function getWorkspaceStatus(
   paths: StoragePaths,
   id: WorkspaceId,
@@ -1293,6 +1394,18 @@ export async function syncWorkspace(
   const repaired: RepositoryRecord["id"][] = [];
   const issues: WorkspaceSyncIssue[] = [];
   const rollbacks: Array<() => Promise<void>> = [];
+  if (await pathEntryExists(workspace.absolutePath)) {
+    const entry = await lstat(workspace.absolutePath);
+    if (!entry.isDirectory() || entry.isSymbolicLink()) {
+      throw new CompulsiveError(
+        "CONFLICT",
+        `Workspace path is not a directory: ${workspace.absolutePath}`,
+      );
+    }
+  } else {
+    await mkdir(workspace.absolutePath, { recursive: true });
+    rollbacks.push(() => rmdir(workspace.absolutePath));
+  }
 
   for (const member of workspace.members) {
     const repository = repositoryRegistry.repositories.find(

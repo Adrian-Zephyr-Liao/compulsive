@@ -197,6 +197,18 @@ export interface WorkspaceStatusRegistry {
   statuses: WorkspaceStatusResult[];
 }
 
+export interface WorkspaceBranchSyncItem {
+  repositoryId: RepositoryId;
+  alias: string;
+  outcome: "synced" | "skipped" | "conflict" | "failed";
+  message: string;
+}
+
+export interface WorkspaceBranchSyncResult {
+  workspaceId: WorkspaceId;
+  items: WorkspaceBranchSyncItem[];
+}
+
 export interface WorkspaceSyncIssue {
   repositoryId: RepositoryId;
   alias: string;
@@ -240,6 +252,7 @@ export interface RepositoryManager {
   convertWorkspaceToReference(input: ConvertWorkspaceToReferenceInput): Promise<WorkspaceRecord>;
   rebaseWorkspaceMember(input: WorkspaceGitActionInput): Promise<void>;
   pushWorkspaceMember(input: WorkspaceGitActionInput): Promise<void>;
+  syncWorkspaceBranches(id: WorkspaceId): Promise<WorkspaceBranchSyncResult>;
   getWorkspaceStatus(id: WorkspaceId, fetchRemote?: boolean): Promise<WorkspaceStatusResult>;
   getWorkspaceStatuses(): Promise<WorkspaceStatusResult[]>;
   syncWorkspace(id: WorkspaceId): Promise<WorkspaceSyncResult>;

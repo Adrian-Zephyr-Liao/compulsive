@@ -1,0 +1,35 @@
+@import "tailwindcss" source("..");
+
+@layer base {
+  :root {
+    color: var(--ant-color-text);
+    background: var(--ant-color-bg-layout);
+    font-synthesis: none;
+  }
+
+  html,
+  body,
+  #app,
+  .ant-app {
+    @apply m-0 h-full;
+  }
+
+  body {
+    @apply min-w-80 overflow-hidden bg-[var(--ant-color-bg-layout)];
+  }
+
+  code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  }
+
+  @media (max-width: 760px) {
+    body {
+      @apply overflow-auto;
+    }
+
+    #app,
+    .ant-app {
+      @apply min-w-[760px];
+    }
+  }
+}

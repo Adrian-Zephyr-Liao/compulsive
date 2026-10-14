@@ -8,6 +8,7 @@ import type { RpcDefinitionsToFunctionsWithNamespace } from "devframe/rpc";
 import { s, type StandardSchemaV1 } from "devframe/utils/simple-schema";
 
 import pkg from "../package.json" with { type: "json" };
+import { startCodexTurn } from "./codex.js";
 import { CompulsiveError } from "./errors.js";
 import { formatCdCommand } from "./shell.js";
 import type {
@@ -16,6 +17,7 @@ import type {
   RepositoryRecord,
   ManagerConfig,
   WorkspaceId,
+  WorkspaceBranchSyncResult,
   WorkspaceRecord,
   WorkspaceStatusResult,
   WorkspaceSyncResult,
@@ -221,6 +223,15 @@ export function createServerFunctions(manager: RepositoryManager) {
     },
   });
 
+  const syncWorkspaceBranches = defineRpcFunction({
+    name: "sync-workspace-branches",
+    type: "action",
+    jsonSerializable: true,
+    args: [s.object({ workspaceId: s.string() })],
+    returns: objectResult<WorkspaceBranchSyncResult>(),
+    handler: ({ workspaceId }) => manager.syncWorkspaceBranches(workspaceId as WorkspaceId),
+  });
+
   const getWorkspaceStatus = defineRpcFunction({
     name: "get-workspace-status",
     type: "query",
@@ -231,6 +242,20 @@ export function createServerFunctions(manager: RepositoryManager) {
       manager.getWorkspaceStatus(workspaceId as WorkspaceId, fetchRemote),
   });
 
+  async function getWorkspaceMemberPath(
+    workspaceId: string,
+    repositoryId: string,
+  ): Promise<string> {
+    const workspace = (await manager.searchWorkspaces()).find(({ id }) => id === workspaceId);
+    const member = workspace?.members.find(({ repositoryId: id }) => id === repositoryId);
+    if (!workspace || !member) {
+      throw new CompulsiveError("NOT_FOUND", "Workspace member is not registered.");
+    }
+    const repository = (await manager.search()).find(({ id }) => id === repositoryId);
+    if (!repository) throw new CompulsiveError("NOT_FOUND", "Repository is not registered.");
+    return member.mode === "worktree" ? member.worktreePath : repository.absolutePath;
+  }
+
   const openWorkspaceMemberInVscode = defineRpcFunction({
     name: "open-workspace-member-in-vscode",
     type: "action",
@@ -238,14 +263,7 @@ export function createServerFunctions(manager: RepositoryManager) {
     args: [s.object({ workspaceId: s.string(), repositoryId: s.string() })],
     returns: objectResult<{ opened: string }>(),
     handler: async ({ workspaceId, repositoryId }): Promise<{ opened: string }> => {
-      const workspace = (await manager.searchWorkspaces()).find(({ id }) => id === workspaceId);
-      const member = workspace?.members.find(({ repositoryId: id }) => id === repositoryId);
-      if (!workspace || !member) {
-        throw new CompulsiveError("NOT_FOUND", "Workspace member is not registered.");
-      }
-      const repository = (await manager.search()).find(({ id }) => id === repositoryId);
-      if (!repository) throw new CompulsiveError("NOT_FOUND", "Repository is not registered.");
-      const path = member.mode === "worktree" ? member.worktreePath : repository.absolutePath;
+      const path = await getWorkspaceMemberPath(workspaceId, repositoryId);
       try {
         await execFileAsync("/usr/bin/open", ["-a", "Visual Studio Code", path]);
       } catch (error) {
@@ -254,6 +272,26 @@ export function createServerFunctions(manager: RepositoryManager) {
         });
       }
       return { opened: path };
+    },
+  });
+
+  const openWorkspaceMemberInCodex = defineRpcFunction({
+    name: "open-workspace-member-in-codex",
+    type: "action",
+    jsonSerializable: true,
+    args: [s.object({ workspaceId: s.string(), repositoryId: s.string(), prompt: s.string() })],
+    returns: objectResult<{ opened: string; threadId: string }>(),
+    handler: async ({
+      workspaceId,
+      repositoryId,
+      prompt,
+    }): Promise<{
+      opened: string;
+      threadId: string;
+    }> => {
+      const path = await getWorkspaceMemberPath(workspaceId, repositoryId);
+      const { threadId } = await startCodexTurn(path, prompt);
+      return { opened: path, threadId };
     },
   });
 
@@ -303,8 +341,10 @@ export function createServerFunctions(manager: RepositoryManager) {
     convertWorkspaceToReference,
     rebaseWorkspaceMember,
     pushWorkspaceMember,
+    syncWorkspaceBranches,
     getWorkspaceStatus,
     openWorkspaceMemberInVscode,
+    openWorkspaceMemberInCodex,
     syncWorkspace,
     openWorkspaceInChatgpt,
     deleteWorkspace,

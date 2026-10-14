@@ -1,7 +1,7 @@
 import { createRoot } from "react-dom/client";
 
 import App from "./App.js";
-import "./styles.css";
+import "./styles/index.css";
 
 const root = document.querySelector<HTMLDivElement>("#app");
 if (!root) throw new Error("Missing #app root element.");

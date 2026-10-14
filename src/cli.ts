@@ -11,7 +11,7 @@ import {
 import { copyTextToClipboard } from "./clipboard.js";
 import { startCompulsiveDevtool } from "./devtool.js";
 import { CompulsiveError, type CompulsiveErrorCode } from "./errors.js";
-import { runGit } from "./git.js";
+import { readWorktreeBranch, runGit } from "./git.js";
 import { createRepositoryManager } from "./manager.js";
 import { formatCdCommand } from "./shell.js";
 import {
@@ -485,16 +485,16 @@ async function inspectWorkspaceMember(
   const [memberCommon, repositoryCommon, branch, status] = await Promise.all([
     gitCommonDirectory(member.worktreePath),
     gitCommonDirectory(repository.absolutePath),
-    runGit(["branch", "--show-current"], { cwd: member.worktreePath }),
+    readWorktreeBranch(member.worktreePath),
     runGit(["status", "--porcelain"], { cwd: member.worktreePath }),
   ]);
   if (
     memberCommon !== repositoryCommon ||
-    branch.stdout !== (member.detached ? "" : member.branch)
+    branch.branch !== (member.detached ? "" : member.branch)
   ) {
     throw new Error("Git worktree identity does not match workspace metadata.");
   }
-  return `worktree ${member.detached ? `detached at ${member.branch}` : member.branch} -> ${member.worktreePath}${status.stdout ? " (dirty)" : ""}`;
+  return `worktree ${member.detached ? `detached at ${member.branch}` : member.branch}${branch.rebasing ? " (rebasing)" : ""} -> ${member.worktreePath}${status.stdout ? " (dirty)" : ""}`;
 }
 
 async function handleDoctor(context: CliContext, json: boolean): Promise<void> {

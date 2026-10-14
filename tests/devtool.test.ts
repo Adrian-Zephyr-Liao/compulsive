@@ -14,7 +14,9 @@ describe("devtool rpc", () => {
     expect(names).toContain("convert-workspace-to-reference");
     expect(names).toContain("rebase-workspace-member");
     expect(names).toContain("push-workspace-member");
+    expect(names).toContain("sync-workspace-branches");
     expect(names).toContain("get-workspace-status");
     expect(names).toContain("open-workspace-member-in-vscode");
+    expect(names).toContain("open-workspace-member-in-codex");
   });
 });

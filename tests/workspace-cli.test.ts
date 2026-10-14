@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runCli } from "../src/cli.js";
 import { createRepositoryManager } from "../src/manager.js";
@@ -12,6 +12,8 @@ import type { NavigationTarget } from "../src/terminal.js";
 import type { RepositoryRecord, WorkspaceRecord } from "../src/types.js";
 
 const execFileAsync = promisify(execFile);
+
+vi.setConfig({ hookTimeout: 30_000, testTimeout: 30_000 });
 
 describe("cpl workspace", () => {
   let sandbox: string;

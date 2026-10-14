@@ -246,7 +246,7 @@ describe("workspace state", () => {
     );
   });
 
-  it("repairs a missing managed link and reports an occupied-path conflict", async () => {
+  it("repairs a missing workspace directory and reports an occupied-path conflict", async () => {
     const repositoryPath = join(sandbox, "repositories", "repair-me");
     await execFileAsync("git", ["init", "-q", repositoryPath]);
     const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
@@ -258,7 +258,7 @@ describe("workspace state", () => {
       repositoryId: repository.id,
     });
     const memberPath = join(workspace.absolutePath, repository.name);
-    await unlink(memberPath);
+    await rm(workspace.absolutePath, { recursive: true });
 
     const repaired = await manager.syncWorkspace(workspace.id);
 
@@ -824,6 +824,127 @@ describe("workspace state", () => {
     ).rejects.toMatchObject({ code: "CONFLICT" });
   }, 30_000);
 
+  it("syncs development and reference branches while preserving merge conflicts", async () => {
+    async function createRemoteRepository(name: string) {
+      const remotePath = join(sandbox, `${name}.git`);
+      const repositoryPath = join(sandbox, "repositories", name);
+      await execFileAsync("git", ["init", "-q", "--bare", "-b", "main", remotePath]);
+      await execFileAsync("git", ["clone", "-q", `file://${remotePath}`, repositoryPath]);
+      await execFileAsync("git", ["-C", repositoryPath, "config", "user.name", "Compulsive Test"]);
+      await execFileAsync("git", [
+        "-C",
+        repositoryPath,
+        "config",
+        "user.email",
+        "test@example.com",
+      ]);
+      await writeFile(join(repositoryPath, "README.md"), "initial\n");
+      await execFileAsync("git", ["-C", repositoryPath, "add", "README.md"]);
+      await execFileAsync("git", ["-C", repositoryPath, "commit", "-q", "-m", "initial"]);
+      await execFileAsync("git", ["-C", repositoryPath, "push", "-q", "-u", "origin", "main"]);
+      return repositoryPath;
+    }
+
+    const developmentPath = await createRemoteRepository("development");
+    const referencePath = await createRemoteRepository("reference");
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const development = await manager.register({ path: developmentPath });
+    const reference = await manager.register({ path: referencePath });
+    const workspace = await manager.createWorkspace({ name: "Batch Sync" });
+    const withDevelopment = await manager.addWorkspaceMember({
+      workspaceId: workspace.id,
+      repositoryId: development.id,
+      mode: "worktree",
+      branch: "feature/batch-sync",
+      createBranch: true,
+    });
+    const withReference = await manager.addWorkspaceMember({
+      workspaceId: workspace.id,
+      repositoryId: reference.id,
+      mode: "worktree",
+      startPoint: "origin/main",
+      detached: true,
+    });
+    const developmentMember = withDevelopment.members[0]!;
+    const referenceMember = withReference.members[1]!;
+    if (developmentMember.mode !== "worktree" || referenceMember.mode !== "worktree") {
+      throw new Error("Expected managed worktrees.");
+    }
+    const developmentWorktree = developmentMember.worktreePath;
+    const referenceWorktree = referenceMember.worktreePath;
+
+    await writeFile(join(developmentWorktree, "feature.txt"), "feature\n");
+    await execFileAsync("git", ["-C", developmentWorktree, "add", "feature.txt"]);
+    await execFileAsync("git", ["-C", developmentWorktree, "commit", "-q", "-m", "feature"]);
+    await writeFile(join(developmentPath, "main.txt"), "main\n");
+    await execFileAsync("git", ["-C", developmentPath, "add", "main.txt"]);
+    await execFileAsync("git", ["-C", developmentPath, "commit", "-q", "-m", "main update"]);
+    await execFileAsync("git", ["-C", developmentPath, "push", "-q", "origin", "main"]);
+    await writeFile(join(referencePath, "reference.txt"), "reference\n");
+    await execFileAsync("git", ["-C", referencePath, "add", "reference.txt"]);
+    await execFileAsync("git", ["-C", referencePath, "commit", "-q", "-m", "reference update"]);
+    await execFileAsync("git", ["-C", referencePath, "push", "-q", "origin", "main"]);
+
+    const synced = await manager.syncWorkspaceBranches(workspace.id);
+
+    expect(synced.items).toEqual([
+      expect.objectContaining({ repositoryId: development.id, outcome: "synced" }),
+      expect.objectContaining({ repositoryId: reference.id, outcome: "synced" }),
+    ]);
+    await expect(readFile(join(developmentWorktree, "main.txt"), "utf8")).resolves.toBe("main\n");
+    await expect(readFile(join(referenceWorktree, "reference.txt"), "utf8")).resolves.toBe(
+      "reference\n",
+    );
+    await expect(
+      execFileAsync("git", ["-C", referenceWorktree, "branch", "--show-current"]),
+    ).resolves.toMatchObject({ stdout: "" });
+    const [localFeature, remoteFeature] = await Promise.all([
+      execFileAsync("git", ["-C", developmentWorktree, "rev-parse", "HEAD"]),
+      execFileAsync("git", [
+        "-C",
+        developmentPath,
+        "ls-remote",
+        "origin",
+        "refs/heads/feature/batch-sync",
+      ]),
+    ]);
+    expect(remoteFeature.stdout.split("\t")[0]).toBe(localFeature.stdout.trim());
+
+    await writeFile(join(developmentWorktree, "shared.txt"), "feature\n");
+    await execFileAsync("git", ["-C", developmentWorktree, "add", "shared.txt"]);
+    await execFileAsync("git", [
+      "-C",
+      developmentWorktree,
+      "commit",
+      "-q",
+      "-m",
+      "feature conflict",
+    ]);
+    await writeFile(join(developmentPath, "shared.txt"), "main\n");
+    await execFileAsync("git", ["-C", developmentPath, "add", "shared.txt"]);
+    await execFileAsync("git", ["-C", developmentPath, "commit", "-q", "-m", "main conflict"]);
+    await execFileAsync("git", ["-C", developmentPath, "push", "-q", "origin", "main"]);
+    await writeFile(join(referenceWorktree, "local-draft.txt"), "keep\n");
+
+    const conflicted = await manager.syncWorkspaceBranches(workspace.id);
+
+    expect(conflicted.items[0]).toMatchObject({
+      repositoryId: development.id,
+      outcome: "conflict",
+    });
+    expect(conflicted.items[1]).toMatchObject({
+      repositoryId: reference.id,
+      outcome: "skipped",
+    });
+    await expect(readFile(join(referenceWorktree, "local-draft.txt"), "utf8")).resolves.toBe(
+      "keep\n",
+    );
+    await expect(
+      execFileAsync("git", ["-C", developmentWorktree, "diff", "--name-only", "--diff-filter=U"]),
+    ).resolves.toMatchObject({ stdout: "shared.txt\n" });
+  }, 30_000);
+
   it("validates clone workspace selection before creating a target", async () => {
     const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
     await manager.initialize();
@@ -1131,6 +1252,51 @@ describe("workspace state", () => {
     });
     const reloadedManager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
     await expect(reloadedManager.getWorkspaceStatuses()).resolves.toEqual([status]);
+  });
+
+  it("repairs a missing worktree link during an in-progress rebase", async () => {
+    const repositoryPath = join(sandbox, "repositories", "rebasing");
+    await execFileAsync("git", ["init", "-q", "-b", "main", repositoryPath]);
+    await execFileAsync("git", ["-C", repositoryPath, "config", "user.name", "Compulsive Test"]);
+    await execFileAsync("git", ["-C", repositoryPath, "config", "user.email", "test@example.com"]);
+    await writeFile(join(repositoryPath, "shared.txt"), "base\n");
+    await execFileAsync("git", ["-C", repositoryPath, "add", "shared.txt"]);
+    await execFileAsync("git", ["-C", repositoryPath, "commit", "-q", "-m", "base"]);
+    await execFileAsync("git", ["-C", repositoryPath, "branch", "development"]);
+
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const repository = await manager.register({ path: repositoryPath });
+    const workspace = await manager.createWorkspace({ name: "Rebase Link" });
+    const updated = await manager.addWorkspaceMember({
+      workspaceId: workspace.id,
+      repositoryId: repository.id,
+      mode: "worktree",
+      branch: "development",
+    });
+    const member = updated.members[0]!;
+    if (member.mode !== "worktree") throw new Error("Expected a managed worktree.");
+    await writeFile(join(member.worktreePath, "shared.txt"), "development\n");
+    await execFileAsync("git", ["-C", member.worktreePath, "commit", "-q", "-am", "development"]);
+    await writeFile(join(repositoryPath, "shared.txt"), "main\n");
+    await execFileAsync("git", ["-C", repositoryPath, "commit", "-q", "-am", "main"]);
+    await execFileAsync("git", ["-C", member.worktreePath, "rebase", "main"]).catch(
+      () => undefined,
+    );
+    const memberPath = join(workspace.absolutePath, member.alias);
+    await unlink(memberPath);
+
+    const result = await manager.syncWorkspace(workspace.id);
+
+    expect(result).toMatchObject({ repaired: [repository.id], issues: [] });
+    expect((await lstat(memberPath)).isSymbolicLink()).toBe(true);
+    expect(await realpath(memberPath)).toBe(await realpath(member.worktreePath));
+    await expect(
+      execFileAsync("git", ["-C", member.worktreePath, "diff", "--name-only", "--diff-filter=U"]),
+    ).resolves.toMatchObject({ stdout: "shared.txt\n" });
+    await expect(
+      execFileAsync("git", ["-C", member.worktreePath, "status"]),
+    ).resolves.toMatchObject({ stdout: expect.stringContaining("rebase in progress") });
   });
 
   it("repairs link members after organizing the canonical repository", async () => {
