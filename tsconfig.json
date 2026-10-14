@@ -6,10 +6,11 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
+    "jsx": "react-jsx",
     "verbatimModuleSyntax": true,
     "declaration": true,
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["src", "tests", "vite.config.ts", "vite.devtool.config.ts", "uno.config.ts"]
+  "include": ["src", "tests", "vite.config.ts", "vite.devtool.config.ts"]
 }
