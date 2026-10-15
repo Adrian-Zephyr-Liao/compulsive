@@ -23,6 +23,7 @@ let initialized = false;
 lines.on("line", (line) => {
   const message = JSON.parse(line);
   if (message.id === 0) {
+    if (message.params.capabilities !== null) process.exit(6);
     setTimeout(() => {
       initialized = true;
       process.stdout.write(JSON.stringify({ id: 0, result: {} }) + "\\n");
@@ -30,24 +31,30 @@ lines.on("line", (line) => {
   }
   if (message.method === "initialized" && !initialized) process.exit(4);
   if (message.id === 1) {
-    if (!initialized || !message.params.ephemeral || message.params.model !== "gpt-6-astra" || message.params.sandbox !== "workspace-write") process.exit(2);
+    if (!initialized || message.params.ephemeral !== false || message.params.model !== "gpt-6-astra" || message.params.sandbox !== "danger-full-access" || message.params.approvalPolicy !== "never") process.exit(2);
     if (message.params.cwd === "/broken") {
       process.stdout.write(JSON.stringify({ id: 1, error: { code: -32600, message: "invalid sandbox" } }) + "\\n");
       return;
     }
-    if (message.params.cwd !== "/workspace" && message.params.cwd !== "/turn-fails") process.exit(5);
+    if (message.params.cwd !== "/workspace" && message.params.cwd !== "/turn-fails" && message.params.cwd !== "/async-fails") process.exit(5);
     process.stdout.write(JSON.stringify({ id: 1, result: { thread: { id: "thread-1" } } }) + "\\n");
   }
   if (message.id === 2) {
     const params = message.params;
-    if (params.input[0].text !== "resolve conflicts" || params.sandboxPolicy.networkAccess !== false) process.exit(3);
-    process.stdout.write(JSON.stringify({ id: 2, result: { turn: { id: "turn-1" } } }) + "\\n");
+    if (params.input[0].text !== "resolve conflicts" || !Array.isArray(params.input[0].text_elements) || params.sandboxPolicy.type !== "dangerFullAccess" || params.approvalPolicy !== "never") process.exit(3);
     if (params.cwd === "/turn-fails") {
-      process.stdout.write(JSON.stringify({ method: "error", params: { error: { message: "model unavailable" }, willRetry: false } }) + "\\n");
-      process.stdout.write(JSON.stringify({ method: "turn/completed", params: { turn: { status: "failed" } } }) + "\\n");
-    } else {
-      process.stdout.write(JSON.stringify({ method: "turn/completed", params: { turn: { status: "completed" } } }) + "\\n");
+      process.stdout.write(JSON.stringify({ id: 2, error: { code: -32600, message: "model unavailable" } }) + "\\n");
+      return;
     }
+    process.stdout.write(JSON.stringify({ id: 2, result: { turn: { id: "turn-1" } } }) + "\\n");
+    if (params.cwd === "/async-fails") {
+      process.stdout.write(JSON.stringify({ method: "error", params: { error: { message: "model unavailable" } } }) + "\\n");
+      process.stdout.write(JSON.stringify({ method: "turn/completed", params: { turn: { status: "failed" } } }) + "\\n");
+      return;
+    }
+    setTimeout(() => {
+      process.stdout.write(JSON.stringify({ method: "turn/completed", params: { turn: { status: "completed" } } }) + "\\n");
+    }, 1000);
   }
 });
 `,
@@ -62,11 +69,18 @@ lines.on("line", (line) => {
     await rm(binDir, { force: true, recursive: true });
   });
 
-  it("completes a workspace-scoped ephemeral turn", async () => {
-    await expect(startCodexTurn("/workspace", "resolve conflicts")).resolves.toEqual({
+  it("returns when a persistent workspace-scoped turn starts", async () => {
+    const result = await Promise.race([
+      startCodexTurn("/workspace", "resolve conflicts"),
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(() => reject(new Error("startCodexTurn waited for completion")), 900),
+      ),
+    ]);
+    expect(result).toMatchObject({
       threadId: "thread-1",
       turnId: "turn-1",
     });
+    await expect(result.completion).resolves.toEqual({ status: "completed" });
   });
 
   it("rejects an empty prompt before starting Codex", async () => {
@@ -78,14 +92,23 @@ lines.on("line", (line) => {
   it("surfaces the app-server error", async () => {
     await expect(startCodexTurn("/broken", "resolve conflicts")).rejects.toMatchObject({
       code: "FILESYSTEM_FAILED",
-      message: "Codex 临时任务失败：invalid sandbox",
+      message: "Codex 任务失败：invalid sandbox",
     });
   });
 
-  it("surfaces an asynchronous turn failure", async () => {
+  it("surfaces a turn startup failure", async () => {
     await expect(startCodexTurn("/turn-fails", "resolve conflicts")).rejects.toMatchObject({
       code: "FILESYSTEM_FAILED",
-      message: "Codex 临时任务失败：model unavailable",
+      message: "Codex 任务失败：model unavailable",
+    });
+  });
+
+  it("reports a failure after the turn starts", async () => {
+    const turn = await startCodexTurn("/async-fails", "resolve conflicts");
+
+    await expect(turn.completion).resolves.toEqual({
+      status: "failed",
+      message: "model unavailable",
     });
   });
 });

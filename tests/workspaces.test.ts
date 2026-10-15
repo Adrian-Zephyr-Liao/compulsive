@@ -635,6 +635,14 @@ describe("workspace state", () => {
     ]);
     expect(promotedBranch.stdout.trim()).toBe("feat/promoted-reference");
     expect(promotedUpstream.stdout.trim()).toBe("");
+    await execFileAsync("git", [
+      "-C",
+      clonedMainPath,
+      "push",
+      "-q",
+      "origin",
+      "HEAD:refs/heads/feat/promoted-reference",
+    ]);
 
     await writeFile(join(selectedMainPath, "upstream.txt"), "new upstream commit\n");
     await execFileAsync("git", ["-C", selectedMainPath, "add", "upstream.txt"]);
@@ -648,6 +656,7 @@ describe("workspace state", () => {
       detached: false,
       ahead: 0,
       behind: 1,
+      mergedIntoDefault: false,
       changes: ["?? draft.txt"],
     });
     await expect(
@@ -673,22 +682,58 @@ describe("workspace state", () => {
       branch: "feat/promoted-reference",
       ahead: 1,
       behind: 0,
+      upstream: "origin/feat/promoted-reference",
+      unpushed: 2,
+      mergedIntoDefault: false,
       changes: [],
     });
-    expect(rebasedMemberStatus).not.toHaveProperty("upstream");
-    expect(rebasedMemberStatus).not.toHaveProperty("unpushed");
     await manager.pushWorkspaceMember({
       workspaceId: cloned.id,
       repositoryId: selectedMainRepository.id,
     });
     const pushedStatus = await manager.getWorkspaceStatus(cloned.id);
-    expect(
-      pushedStatus.members.find((status) => status.repositoryId === selectedMainRepository.id),
-    ).toMatchObject({
+    const pushedMemberStatus = pushedStatus.members.find(
+      (status) => status.repositoryId === selectedMainRepository.id,
+    );
+    expect(pushedMemberStatus).toMatchObject({
       upstream: "origin/feat/promoted-reference",
       unpushed: 0,
       mergedIntoDefault: false,
     });
+    expect(pushedMemberStatus?.developmentTip).toBeTruthy();
+
+    await writeFile(join(selectedMainPath, "post-push-main.txt"), "post push main\n");
+    await execFileAsync("git", ["-C", selectedMainPath, "add", "post-push-main.txt"]);
+    await execFileAsync("git", ["-C", selectedMainPath, "commit", "-q", "-m", "post push main"]);
+    await execFileAsync("git", ["-C", selectedMainPath, "push", "-q", "origin", "main"]);
+    await manager.rebaseWorkspaceMember({
+      workspaceId: cloned.id,
+      repositoryId: selectedMainRepository.id,
+    });
+    const forcePushStatus = await manager.getWorkspaceStatus(cloned.id);
+    expect(
+      forcePushStatus.members.find((status) => status.repositoryId === selectedMainRepository.id),
+    ).toMatchObject({ forcePushRequired: true });
+    await expect(
+      manager.pushWorkspaceMember({
+        workspaceId: cloned.id,
+        repositoryId: selectedMainRepository.id,
+      }),
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: expect.stringContaining("--force-with-lease"),
+    });
+    await manager.pushWorkspaceMember({
+      workspaceId: cloned.id,
+      repositoryId: selectedMainRepository.id,
+      force: true,
+    });
+    const forcePushedStatus = await manager.getWorkspaceStatus(cloned.id);
+    const forcePushedMemberStatus = forcePushedStatus.members.find(
+      (status) => status.repositoryId === selectedMainRepository.id,
+    );
+    expect(forcePushedMemberStatus).toMatchObject({ unpushed: 0 });
+    expect(forcePushedMemberStatus).not.toHaveProperty("forcePushRequired");
 
     await execFileAsync("git", ["-C", selectedMainPath, "fetch", "-q", "origin"]);
     await execFileAsync("git", [
@@ -873,6 +918,20 @@ describe("workspace state", () => {
     }
     const developmentWorktree = developmentMember.worktreePath;
     const referenceWorktree = referenceMember.worktreePath;
+
+    await execFileAsync("git", [
+      "-C",
+      developmentWorktree,
+      "push",
+      "-q",
+      "-u",
+      "origin",
+      "feature/batch-sync",
+    ]);
+    const emptyBranchStatus = await manager.getWorkspaceStatus(workspace.id, true);
+    expect(
+      emptyBranchStatus.members.find((status) => status.repositoryId === development.id),
+    ).toMatchObject({ mergedIntoDefault: false });
 
     await writeFile(join(developmentWorktree, "feature.txt"), "feature\n");
     await execFileAsync("git", ["-C", developmentWorktree, "add", "feature.txt"]);

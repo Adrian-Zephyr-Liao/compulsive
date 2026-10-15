@@ -137,6 +137,7 @@ export default function WorkspaceApp() {
   const [confirmState, setConfirmState] = useState<ConfirmState>();
   const [confirmAcknowledged, setConfirmAcknowledged] = useState(false);
   const [detailMember, setDetailMember] = useState<WorkspaceMember>();
+  const [codexTasks, setCodexTasks] = useState<Record<string, "starting" | "running">>({});
 
   const selectedWorkspaceIdRef = useRef<string | undefined>(undefined);
   const rpcPromiseRef = useRef<Promise<WorkspaceRpc> | null>(null);
@@ -567,12 +568,35 @@ export default function WorkspaceApp() {
       const skipped = count("skipped");
       const conflicts = count("conflict");
       const failed = count("failed");
+      const issues = result.items.filter(
+        (item) => item.outcome === "failed" || item.outcome === "conflict",
+      );
       if (conflicts) setRepositoryState("conflicts");
       setFeedback(undefined);
       const options = {
-        title: conflicts || failed ? "批量同步需要继续处理" : "批量同步完成",
-        description: `${synced} 个已同步，${skipped} 个已跳过，${conflicts} 个冲突，${failed} 个失败。`,
-        duration: 8,
+        title: failed
+          ? `${failed} 个仓库同步失败`
+          : conflicts
+            ? `${conflicts} 个仓库产生冲突`
+            : "批量同步完成",
+        description: (
+          <div className="grid gap-2">
+            <Text type="secondary">
+              {synced} 个已同步，{skipped} 个已跳过，{conflicts} 个冲突，{failed} 个失败。
+            </Text>
+            {issues.length > 0 && (
+              <ul className="m-0 grid max-h-52 gap-1 overflow-auto pl-5">
+                {issues.map((item) => (
+                  <li key={item.repositoryId}>
+                    <Text strong>{item.alias}</Text>
+                    <Text type="secondary">：{item.message}</Text>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ),
+        duration: issues.length ? 0 : 8,
         placement: "topRight" as const,
       };
       if (failed) notification.error(options);
@@ -674,20 +698,41 @@ ${status.conflicts.map((file) => `- ${file}`).join("\n")}
 2. 如果当前处于 rebase，且冲突很多或会在多个提交中反复解决，先确认原始状态可恢复，再执行 git rebase --abort，改为 git merge 远端主分支后解决冲突。
 3. 保留双方有效改动，不使用 git checkout --ours/--theirs 批量覆盖。
 4. 直接在当前工作目录处理，不创建新的项目、Workspace、分支或 worktree。
-5. 可以编辑文件并 git add 已解决文件，但不要执行 rebase --continue、commit、push、reset 或清理未提交内容。
-6. 运行与改动相关的最小验证，总结每个冲突的处理依据，并等待我确认下一步。`;
+5. 解决全部冲突后执行 git add，并完成本地提交；如果继续 rebase，应完成必要的 rebase --continue，确保最终 HEAD 已提交，不创建空提交。提交信息遵循仓库现有规范。
+6. 不要 push、reset、clean，也不要清理原有未提交内容。
+7. 运行与改动相关的最小验证，最后报告提交 SHA、验证结果和每个冲突的处理依据。`;
     const rpc = await getRpc();
-    await runAction(
-      "Codex 临时处理",
-      () =>
-        rpc.call("open-workspace-member-in-codex", {
-          workspaceId: workspace.id,
-          repositoryId: member.repositoryId,
-          prompt,
-        }),
-      "Codex 临时会话已完成冲突处理",
-      workspace.id,
-    );
+    const messageKey = `codex-${member.repositoryId}`;
+    if (codexTasks[member.repositoryId]) return;
+    setCodexTasks((current) => ({ ...current, [member.repositoryId]: "starting" }));
+    void message.loading({ content: "正在创建 Codex 聊天…", key: messageKey, duration: 0 });
+    try {
+      const turn = await rpc.call("open-workspace-member-in-codex", {
+        workspaceId: workspace.id,
+        repositoryId: member.repositoryId,
+        prompt,
+      });
+      setCodexTasks((current) => ({ ...current, [member.repositoryId]: "running" }));
+      void message.loading({ content: "Codex 正在处理冲突并提交…", key: messageKey, duration: 0 });
+      const result = await rpc.call("wait-for-codex-turn", { turnId: turn.turnId });
+      if (result.status === "failed") throw new Error(result.message ?? "Codex turn failed.");
+      void message.success({ content: "Codex 已处理冲突并完成本地提交", key: messageKey });
+      if (selectedWorkspaceIdRef.current === workspace.id) await refreshWorkspaceStatus(false);
+    } catch (error) {
+      message.destroy(messageKey);
+      notification.error({
+        title: "Codex 处理失败",
+        description: describeError(error),
+        duration: 8,
+        placement: "topRight",
+      });
+    } finally {
+      setCodexTasks((current) => {
+        const next = { ...current };
+        delete next[member.repositoryId];
+        return next;
+      });
+    }
   }
 
   function openPromoteReference(workspace: DevtoolWorkspace, member: WorktreeMember): void {
@@ -763,18 +808,48 @@ ${status.conflicts.map((file) => `- ${file}`).join("\n")}
     );
   }
 
-  async function pushMember(workspace: DevtoolWorkspace, member: WorkspaceMember): Promise<void> {
+  async function executePush(
+    workspace: DevtoolWorkspace,
+    member: WorkspaceMember,
+    force = false,
+  ): Promise<void> {
     const rpc = await getRpc();
     await runAction(
-      "同步并 Push 分支",
+      force ? "安全强制推送" : "同步并 Push 分支",
       () =>
         rpc.call("push-workspace-member", {
           workspaceId: workspace.id,
           repositoryId: member.repositoryId,
+          force,
         }),
-      `已同步并推送 ${member.alias}`,
+      force ? `已使用 --force-with-lease 推送 ${member.alias}` : `已同步并推送 ${member.alias}`,
       workspace.id,
     );
+  }
+
+  function pushMember(workspace: DevtoolWorkspace, member: WorkspaceMember): void {
+    if (!statusFor(member)?.forcePushRequired) {
+      void executePush(workspace, member);
+      return;
+    }
+    modal.confirm({
+      centered: true,
+      title: "Rebase 已改写远端分支历史",
+      icon: <WarningOutlined />,
+      content: (
+        <div className="grid gap-2">
+          <Text>普通 Push 会被远端拒绝。确认后将使用安全强推更新 {member.alias} 的远端分支。</Text>
+          <Text type="secondary">
+            实际执行 --force-with-lease；如果远端在 Rebase
+            后又有新提交，推送会自动停止，不会覆盖他人改动。
+          </Text>
+        </div>
+      ),
+      okText: "使用安全强推",
+      okType: "danger",
+      cancelText: "取消",
+      onOk: () => executePush(workspace, member, true),
+    });
   }
 
   async function openWorkspaceInChatgpt(workspace: DevtoolWorkspace): Promise<void> {
@@ -996,6 +1071,13 @@ ${status.conflicts.map((file) => `- ${file}`).join("\n")}
             {status.unpushed} 未推送
           </Tag>
         )}
+        {status.forcePushRequired && (
+          <Tooltip title="Rebase 改写了已推送的提交，需确认后使用 --force-with-lease">
+            <Tag color="error" icon={<WarningOutlined />}>
+              Rebase 后需安全强推
+            </Tag>
+          </Tooltip>
+        )}
         {!status.ahead && !status.behind && (
           <Tag color="success" icon={<CheckOutlined />}>
             已同步 {status.defaultBranch}
@@ -1109,7 +1191,8 @@ ${status.conflicts.map((file) => `- ${file}`).join("\n")}
           menuItems.push({
             key: "push",
             icon: <CloudUploadOutlined />,
-            label: "同步并 Push 分支",
+            label: status?.forcePushRequired ? "使用安全强推" : "同步并 Push 分支",
+            danger: Boolean(status?.forcePushRequired),
           });
         }
         if (worktree) {
@@ -1131,7 +1214,7 @@ ${status.conflicts.map((file) => `- ${file}`).join("\n")}
 
         const handleMenuClick: NonNullable<MenuProps["onClick"]> = ({ key }) => {
           if (key === "rebase") void rebaseMember(currentWorkspace, member);
-          if (key === "push") void pushMember(currentWorkspace, member);
+          if (key === "push") pushMember(currentWorkspace, member);
           if (key === "switch" && worktree) openPromoteReference(currentWorkspace, worktree);
           if (key === "reference" && worktree) openConvertToReference(currentWorkspace, worktree);
           if (key === "remove") openRemoveMember(currentWorkspace, member);
@@ -1317,7 +1400,7 @@ ${status.conflicts.map((file) => `- ${file}`).join("\n")}
                   <section className="rounded-lg border border-[var(--ant-color-border-secondary)] bg-[var(--ant-color-fill-quaternary)] p-3">
                     <Text strong>选择处理方式</Text>
                     <Text className="mt-1 mb-3 block" type="secondary">
-                      人工精确处理，或启动临时 Codex 会话直接交给 AI 处理。
+                      人工精确处理，或以完全访问权限创建普通 Codex 聊天交给 AI 处理。
                     </Text>
                     <div className="grid grid-cols-2 gap-2">
                       <Button
@@ -1329,14 +1412,19 @@ ${status.conflicts.map((file) => `- ${file}`).join("\n")}
                       >
                         VS Code 人工处理
                       </Button>
-                      <Tooltip title="启动不落盘的临时 Codex 会话并发送当前冲突上下文">
+                      <Tooltip title="以完全访问权限创建可在 Codex 中继续查看的聊天，不新建项目">
                         <Button
                           block
-                          disabled={busy}
+                          disabled={busy || Boolean(codexTasks[detailMember.repositoryId])}
                           icon={<ThunderboltOutlined />}
+                          loading={Boolean(codexTasks[detailMember.repositoryId])}
                           onClick={() => void openMemberInCodex(currentWorkspace, detailMember)}
                         >
-                          Codex 临时处理
+                          {codexTasks[detailMember.repositoryId] === "starting"
+                            ? "正在启动"
+                            : codexTasks[detailMember.repositoryId] === "running"
+                              ? "Codex 处理中"
+                              : "交给 Codex 处理"}
                         </Button>
                       </Tooltip>
                     </div>

@@ -70,6 +70,44 @@ cpl ui
 The DevTool is served on localhost with Devframe authentication and opens in the browser. Use
 `cpl ui --no-open` to start it without opening a new tab.
 
+## Workspace DevTool
+
+The DevTool is the daily control plane for task-oriented Workspaces. It keeps the repository table
+wide enough to scan, places common actions above the table, and runs remote status checks only when
+requested.
+
+![Compulsive Workspace DevTool with redacted example data](./docs/assets/compulsive-devtool-redacted.png)
+
+_Every name, remote, branch, and filesystem path in this screenshot is synthetic._
+
+Use it to:
+
+- Create a Workspace or clone selected repositories from an existing Workspace.
+- Add a repository as an isolated development worktree or a detached reference checkout.
+- Choose, create, and later switch development branches; an existing remote branch is tracked
+  automatically.
+- Convert a reference checkout to a development worktree and back again when the task changes.
+- Refresh reference checkouts from the remote default branch without creating local branches.
+- Inspect uncommitted files, conflicts, ahead/behind counts, unpushed commits, and whether a remote
+  development branch has been merged into the default branch.
+- Batch-sync clean development branches, with per-repository failures and conflicts reported by
+  name.
+- Open a member in VS Code, open the Workspace in ChatGPT, or hand a conflict to a dedicated Codex
+  chat with full filesystem access.
+
+Status is persisted with the rest of CPL's application data, so the last result survives a browser
+or DevTool restart. There is no background polling; use **Check status** whenever fresh remote state
+is needed.
+
+### Rebase and push safety
+
+Normal branch divergence is synchronized with the exact same-name remote branch before a regular
+push. When rebasing onto the remote default branch rewrites commits that were already pushed, the
+DevTool records the pre-rebase remote commit, shows a red **Safe force push required** status, and
+blocks a regular push. After confirmation it uses an explicit `--force-with-lease` bound to that
+recorded commit. If the remote branch changed again, Git rejects the push instead of overwriting the
+new work.
+
 ## Directory model
 
 Remote repositories are classified by host, owner path, and repository name:
@@ -215,6 +253,7 @@ throw `CompulsiveError`, whose `code` is stable and machine-readable.
 - Organization refuses occupied, nested, stale, and cross-volume targets.
 - A moved repository is revalidated before its index path changes.
 - Workspace links follow organized repositories and refuse to overwrite user content.
+- Rewritten remote branch history requires an explicit, SHA-bound `--force-with-lease` confirmation.
 - `forget`, Workspace removal, and repository organization never delete canonical repositories.
 
 ## Development

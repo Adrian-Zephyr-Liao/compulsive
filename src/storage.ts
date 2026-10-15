@@ -164,6 +164,8 @@ function isWorkspaceMember(value: unknown): boolean {
     typeof member.branch === "string" &&
     member.branch.length > 0 &&
     (member.detached === undefined || member.detached === true) &&
+    (member.forcePushBase === undefined ||
+      (typeof member.forcePushBase === "string" && member.forcePushBase.length > 0)) &&
     typeof member.worktreePath === "string" &&
     isAbsolute(member.worktreePath)
   );
@@ -226,11 +228,13 @@ function isWorkspaceMemberStatus(value: unknown): boolean {
     typeof status.repositoryId === "string" &&
     typeof status.branch === "string" &&
     typeof status.detached === "boolean" &&
+    (status.developmentTip === undefined || typeof status.developmentTip === "string") &&
     (status.defaultBranch === undefined || typeof status.defaultBranch === "string") &&
     (status.ahead === undefined || typeof status.ahead === "number") &&
     (status.behind === undefined || typeof status.behind === "number") &&
     (status.upstream === undefined || typeof status.upstream === "string") &&
     (status.unpushed === undefined || typeof status.unpushed === "number") &&
+    (status.forcePushRequired === undefined || typeof status.forcePushRequired === "boolean") &&
     (status.mergedIntoDefault === undefined || typeof status.mergedIntoDefault === "boolean") &&
     Array.isArray(status.changes) &&
     status.changes.every((change) => typeof change === "string") &&

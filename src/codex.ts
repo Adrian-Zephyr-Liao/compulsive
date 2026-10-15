@@ -7,6 +7,12 @@ import { CompulsiveError } from "./errors.js";
 export interface CodexTurn {
   threadId: string;
   turnId: string;
+  completion: Promise<CodexTurnCompletion>;
+}
+
+export interface CodexTurnCompletion {
+  status: "completed" | "failed";
+  message?: string;
 }
 
 interface AppServerMessage {
@@ -29,11 +35,16 @@ export async function startCodexTurn(cwd: string, prompt: string): Promise<Codex
   const child = spawn("codex", ["app-server"], { stdio: ["pipe", "pipe", "pipe"] });
   const lines = createInterface({ input: child.stdout });
   let stderr = "";
-  let settled = false;
+  let started = false;
+  let finished = false;
   let currentThreadId = "";
   let currentTurnId = "";
   let turnError = "";
   let lifetimeTimer: NodeJS.Timeout | undefined;
+  let completeTurn: (result: CodexTurnCompletion) => void;
+  const completion = new Promise<CodexTurnCompletion>((resolve) => {
+    completeTurn = resolve;
+  });
 
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk: string) => {
@@ -54,12 +65,14 @@ export async function startCodexTurn(cwd: string, prompt: string): Promise<Codex
     }
 
     function fail(error: unknown): void {
-      if (settled) return;
-      settled = true;
+      if (finished) return;
+      finished = true;
       stop();
       const message = error instanceof Error ? error.message : String(error);
+      completeTurn({ status: "failed", message });
+      if (started) return;
       reject(
-        new CompulsiveError("FILESYSTEM_FAILED", `Codex 临时任务失败：${message}`, {
+        new CompulsiveError("FILESYSTEM_FAILED", `Codex 任务失败：${message}`, {
           cause: message,
           stderr: stderr.trim(),
         }),
@@ -73,7 +86,7 @@ export async function startCodexTurn(cwd: string, prompt: string): Promise<Codex
     child.once("error", fail);
     child.stdin.once("error", fail);
     child.once("close", (code) => {
-      if (!settled) fail(new Error(`Codex app-server exited with code ${String(code)}.`));
+      if (!finished) fail(new Error(`Codex app-server exited with code ${String(code)}.`));
     });
     lines.on("line", (line) => {
       let message: AppServerMessage;
@@ -97,9 +110,9 @@ export async function startCodexTurn(cwd: string, prompt: string): Promise<Codex
           fail(new Error("Codex turn identifiers are missing."));
           return;
         }
-        settled = true;
+        finished = true;
+        completeTurn({ status: "completed" });
         stop();
-        resolve({ threadId: currentThreadId, turnId: currentTurnId });
         return;
       }
       if (message.id === 0) {
@@ -114,9 +127,9 @@ export async function startCodexTurn(cwd: string, prompt: string): Promise<Codex
           params: {
             cwd,
             approvalPolicy: "never",
-            ephemeral: true,
+            ephemeral: false,
             model: "gpt-6-astra",
-            sandbox: "workspace-write",
+            sandbox: "danger-full-access",
             serviceName: "compulsive",
           },
         });
@@ -134,13 +147,11 @@ export async function startCodexTurn(cwd: string, prompt: string): Promise<Codex
           id: 2,
           params: {
             threadId,
-            input: [{ type: "text", text: prompt }],
+            input: [{ type: "text", text: prompt, text_elements: [] }],
             cwd,
             approvalPolicy: "never",
             sandboxPolicy: {
-              type: "workspaceWrite",
-              writableRoots: [cwd],
-              networkAccess: false,
+              type: "dangerFullAccess",
             },
           },
         });
@@ -157,12 +168,14 @@ export async function startCodexTurn(cwd: string, prompt: string): Promise<Codex
           return;
         }
         currentTurnId = turnId;
+        started = true;
         clearTimeout(startTimer);
         lifetimeTimer = setTimeout(
           () => fail(new Error("Timed out while waiting for the Codex turn to complete.")),
           60 * 60 * 1_000,
         );
         lifetimeTimer.unref();
+        resolve({ threadId: currentThreadId, turnId: currentTurnId, completion });
       }
     });
 
@@ -171,6 +184,7 @@ export async function startCodexTurn(cwd: string, prompt: string): Promise<Codex
       id: 0,
       params: {
         clientInfo: { name: "compulsive", title: "Compulsive", version: pkg.version },
+        capabilities: null,
       },
     });
   });

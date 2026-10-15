@@ -8,7 +8,7 @@ import type { RpcDefinitionsToFunctionsWithNamespace } from "devframe/rpc";
 import { s, type StandardSchemaV1 } from "devframe/utils/simple-schema";
 
 import pkg from "../package.json" with { type: "json" };
-import { startCodexTurn } from "./codex.js";
+import { startCodexTurn, type CodexTurn, type CodexTurnCompletion } from "./codex.js";
 import { CompulsiveError } from "./errors.js";
 import { formatCdCommand } from "./shell.js";
 import type {
@@ -51,6 +51,8 @@ function objectResult<T extends object>(): StandardSchemaV1<T> {
 }
 
 export function createServerFunctions(manager: RepositoryManager) {
+  const activeCodexTurns = new Map<string, Promise<CodexTurn>>();
+  const codexCompletions = new Map<string, Promise<CodexTurnCompletion>>();
   const getState = defineRpcFunction({
     name: "get-state",
     type: "query",
@@ -212,12 +214,19 @@ export function createServerFunctions(manager: RepositoryManager) {
     name: "push-workspace-member",
     type: "action",
     jsonSerializable: true,
-    args: [s.object({ workspaceId: s.string(), repositoryId: s.string() })],
+    args: [
+      s.object({
+        workspaceId: s.string(),
+        repositoryId: s.string(),
+        force: s.optional(s.boolean()),
+      }),
+    ],
     returns: objectResult<{ pushed: string }>(),
-    handler: async ({ workspaceId, repositoryId }): Promise<{ pushed: string }> => {
+    handler: async ({ workspaceId, repositoryId, force }): Promise<{ pushed: string }> => {
       await manager.pushWorkspaceMember({
         workspaceId: workspaceId as WorkspaceId,
         repositoryId: repositoryId as RepositoryId,
+        ...(force === undefined ? {} : { force }),
       });
       return { pushed: repositoryId };
     },
@@ -280,7 +289,7 @@ export function createServerFunctions(manager: RepositoryManager) {
     type: "action",
     jsonSerializable: true,
     args: [s.object({ workspaceId: s.string(), repositoryId: s.string(), prompt: s.string() })],
-    returns: objectResult<{ opened: string; threadId: string }>(),
+    returns: objectResult<{ opened: string; threadId: string; turnId: string }>(),
     handler: async ({
       workspaceId,
       repositoryId,
@@ -288,10 +297,39 @@ export function createServerFunctions(manager: RepositoryManager) {
     }): Promise<{
       opened: string;
       threadId: string;
+      turnId: string;
     }> => {
       const path = await getWorkspaceMemberPath(workspaceId, repositoryId);
-      const { threadId } = await startCodexTurn(path, prompt);
-      return { opened: path, threadId };
+      const memberKey = `${workspaceId}:${repositoryId}`;
+      let pendingTurn = activeCodexTurns.get(memberKey);
+      if (!pendingTurn) {
+        pendingTurn = startCodexTurn(path, prompt);
+        activeCodexTurns.set(memberKey, pendingTurn);
+      }
+      try {
+        const { threadId, turnId, completion } = await pendingTurn;
+        codexCompletions.set(turnId, completion);
+        void completion.then(() => {
+          if (activeCodexTurns.get(memberKey) === pendingTurn) activeCodexTurns.delete(memberKey);
+        });
+        return { opened: path, threadId, turnId };
+      } catch (error) {
+        if (activeCodexTurns.get(memberKey) === pendingTurn) activeCodexTurns.delete(memberKey);
+        throw error;
+      }
+    },
+  });
+
+  const waitForCodexTurn = defineRpcFunction({
+    name: "wait-for-codex-turn",
+    type: "query",
+    jsonSerializable: true,
+    args: [s.object({ turnId: s.string() })],
+    returns: objectResult<CodexTurnCompletion>(),
+    handler: ({ turnId }): Promise<CodexTurnCompletion> => {
+      const completion = codexCompletions.get(turnId);
+      if (!completion) throw new CompulsiveError("NOT_FOUND", "Codex turn is not registered.");
+      return completion;
     },
   });
 
@@ -345,6 +383,7 @@ export function createServerFunctions(manager: RepositoryManager) {
     getWorkspaceStatus,
     openWorkspaceMemberInVscode,
     openWorkspaceMemberInCodex,
+    waitForCodexTurn,
     syncWorkspace,
     openWorkspaceInChatgpt,
     deleteWorkspace,

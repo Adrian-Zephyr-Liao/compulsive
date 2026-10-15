@@ -32,6 +32,7 @@ import type {
   SearchWorkspacesInput,
   WorkspaceId,
   WorkspaceGitActionInput,
+  WorkspacePushInput,
 } from "./types.js";
 import {
   addWorkspaceMember,
@@ -568,7 +569,7 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
     convertWorkspaceToReference: (input: ConvertWorkspaceToReferenceInput) =>
       convertWorkspaceToReference(paths, input),
     rebaseWorkspaceMember: (input: WorkspaceGitActionInput) => rebaseWorkspaceMember(paths, input),
-    pushWorkspaceMember: (input: WorkspaceGitActionInput) => pushWorkspaceMember(paths, input),
+    pushWorkspaceMember: (input: WorkspacePushInput) => pushWorkspaceMember(paths, input),
     syncWorkspaceBranches: (id: WorkspaceId) => syncWorkspaceBranches(paths, id),
     getWorkspaceStatus: (id: WorkspaceId, fetchRemote = false) =>
       getWorkspaceStatus(paths, id, fetchRemote),

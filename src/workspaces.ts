@@ -44,6 +44,7 @@ import type {
   WorkspaceMember,
   WorkspaceMigrationResult,
   WorkspaceMemberStatus,
+  WorkspacePushInput,
   WorkspaceRecord,
   WorkspaceStatusResult,
   WorkspaceSyncIssue,
@@ -1164,24 +1165,93 @@ async function getCleanWorkspaceWorktree(
   return { member, repository };
 }
 
+async function setForcePushBase(
+  paths: StoragePaths,
+  workspaceId: WorkspaceId,
+  repositoryId: RepositoryRecord["id"],
+  forcePushBase?: string,
+): Promise<void> {
+  const registry = await readWorkspaceRegistry(paths.workspaces);
+  const { index, workspace } = findWorkspace(registry, workspaceId);
+  registry.workspaces[index] = {
+    ...workspace,
+    members: workspace.members.map((member) => {
+      if (member.repositoryId !== repositoryId || member.mode !== "worktree") return member;
+      const { forcePushBase: _previous, ...withoutForcePushBase } = member;
+      return forcePushBase ? { ...withoutForcePushBase, forcePushBase } : withoutForcePushBase;
+    }),
+    updatedAt: new Date().toISOString(),
+  };
+  await writeJsonAtomic(paths.workspaces, registry);
+}
+
 export async function rebaseWorkspaceMember(
   paths: StoragePaths,
   input: WorkspaceGitActionInput,
 ): Promise<void> {
   const { member, repository } = await getCleanWorkspaceWorktree(paths, input);
+  const pushBranch = member.detached
+    ? undefined
+    : await originBranch(repository.absolutePath, member.branch, true);
+  const pushTip = pushBranch
+    ? (await runGit(["rev-parse", `${pushBranch}^{commit}`], { cwd: member.worktreePath })).stdout
+    : undefined;
+  if (pushTip) {
+    // Persist before rewriting so a failed rebase cannot leave an unsafe normal push path.
+    await setForcePushBase(paths, input.workspaceId, input.repositoryId, pushTip);
+  }
   const remoteBranch = await fetchOriginDefaultBranch(repository.absolutePath);
   await runGit(member.detached ? ["switch", "--detach", remoteBranch] : ["rebase", remoteBranch], {
     cwd: member.worktreePath,
   });
+  if (pushTip) {
+    const stillFastForward = await runGit(["merge-base", "--is-ancestor", pushTip, "HEAD"], {
+      cwd: member.worktreePath,
+      allowFailure: true,
+    });
+    if (stillFastForward.exitCode === 0) {
+      await setForcePushBase(paths, input.workspaceId, input.repositoryId);
+    }
+  }
 }
 
 export async function pushWorkspaceMember(
   paths: StoragePaths,
-  input: WorkspaceGitActionInput,
+  input: WorkspacePushInput,
 ): Promise<void> {
   const { member, repository } = await getCleanWorkspaceWorktree(paths, input);
   if (member.detached) {
     throw new CompulsiveError("CONFLICT", "Workspace member is not a development worktree.");
+  }
+  if (input.force && !member.forcePushBase) {
+    throw new CompulsiveError("CONFLICT", "当前分支不需要强制推送，请重新检查状态。");
+  }
+  if (member.forcePushBase) {
+    const stillFastForward = await runGit(
+      ["merge-base", "--is-ancestor", member.forcePushBase, "HEAD"],
+      { cwd: member.worktreePath, allowFailure: true },
+    );
+    if (stillFastForward.exitCode !== 0) {
+      if (!input.force) {
+        throw new CompulsiveError(
+          "CONFLICT",
+          "Rebase 已改写远端分支历史，需要确认后使用 --force-with-lease 推送。",
+        );
+      }
+      await runGit(
+        [
+          "push",
+          "-u",
+          `--force-with-lease=refs/heads/${member.branch}:${member.forcePushBase}`,
+          "origin",
+          `HEAD:refs/heads/${member.branch}`,
+        ],
+        { cwd: member.worktreePath },
+      );
+      await setForcePushBase(paths, input.workspaceId, input.repositoryId);
+      return;
+    }
+    await setForcePushBase(paths, input.workspaceId, input.repositoryId);
   }
   const remoteBranch = await originBranch(repository.absolutePath, member.branch, true);
   if (remoteBranch) await runGit(["rebase", remoteBranch], { cwd: member.worktreePath });
@@ -1194,8 +1264,12 @@ export async function syncWorkspaceBranches(
   paths: StoragePaths,
   id: WorkspaceId,
 ): Promise<WorkspaceBranchSyncResult> {
-  const workspaceRegistry = await readWorkspaceRegistry(paths.workspaces);
+  const [workspaceRegistry, statusRegistry] = await Promise.all([
+    readWorkspaceRegistry(paths.workspaces),
+    readWorkspaceStatusRegistry(paths.workspaceStatuses),
+  ]);
   const { workspace } = findWorkspace(workspaceRegistry, id);
+  const previousStatus = statusRegistry.statuses.find(({ workspaceId }) => workspaceId === id);
   const items: WorkspaceBranchSyncItem[] = [];
 
   for (const member of workspace.members) {
@@ -1227,9 +1301,13 @@ export async function syncWorkspaceBranches(
       }
 
       const remoteBranch = await originBranch(repository.absolutePath, worktree.branch, true);
-      if (remoteBranch && remoteBranch !== defaultBranch) {
+      const developmentTip = previousStatus?.members.find(
+        (status) =>
+          status.repositoryId === member.repositoryId && status.branch === worktree.branch,
+      )?.developmentTip;
+      if (remoteBranch && remoteBranch !== defaultBranch && developmentTip) {
         const [merged, unpushed] = await Promise.all([
-          runGit(["merge-base", "--is-ancestor", remoteBranch, defaultBranch], {
+          runGit(["merge-base", "--is-ancestor", developmentTip, defaultBranch], {
             cwd: worktree.worktreePath,
             allowFailure: true,
           }),
@@ -1294,11 +1372,13 @@ export async function getWorkspaceStatus(
   id: WorkspaceId,
   fetchRemote = false,
 ): Promise<WorkspaceStatusResult> {
-  const [workspaceRegistry, repositoryRegistry] = await Promise.all([
+  const [workspaceRegistry, repositoryRegistry, statusRegistry] = await Promise.all([
     readWorkspaceRegistry(paths.workspaces),
     readRegistry(paths.registry),
+    readWorkspaceStatusRegistry(paths.workspaceStatuses),
   ]);
   const { workspace } = findWorkspace(workspaceRegistry, id);
+  const previousStatus = statusRegistry.statuses.find(({ workspaceId }) => workspaceId === id);
   const members = await Promise.all(
     workspace.members.map(async (member): Promise<WorkspaceMemberStatus> => {
       const repository = findRepository(repositoryRegistry.repositories, member.repositoryId);
@@ -1320,6 +1400,8 @@ export async function getWorkspaceStatus(
             : undefined;
         const upstream = pushBranch ?? (await currentUpstream(path));
         let unpushed: number | undefined;
+        let forcePushRequired: boolean | undefined;
+        let developmentTip: string | undefined;
         let mergedIntoDefault: boolean | undefined;
         let comparisonError: string | undefined;
         if (defaultBranch) {
@@ -1339,22 +1421,47 @@ export async function getWorkspaceStatus(
           });
           if (pendingPush.exitCode === 0) unpushed = Number(pendingPush.stdout);
         }
+        if (member.mode === "worktree" && member.forcePushBase) {
+          const stillFastForward = await runGit(
+            ["merge-base", "--is-ancestor", member.forcePushBase, "HEAD"],
+            { cwd: path, allowFailure: true },
+          );
+          forcePushRequired = stillFastForward.exitCode !== 0;
+        }
         if (defaultBranch && pushBranch && pushBranch !== defaultBranch) {
-          const merged = await runGit(["merge-base", "--is-ancestor", pushBranch, defaultBranch], {
-            cwd: path,
-            allowFailure: true,
-          });
-          if (merged.exitCode <= 1) mergedIntoDefault = merged.exitCode === 0;
+          const previousMemberStatus = previousStatus?.members.find(
+            (candidate) =>
+              candidate.repositoryId === member.repositoryId &&
+              candidate.branch === (member.mode === "worktree" ? member.branch : ""),
+          );
+          const uniqueCommits = await runGit(
+            ["rev-list", "--count", `${defaultBranch}..${pushBranch}`],
+            { cwd: path, allowFailure: true },
+          );
+          developmentTip = previousMemberStatus?.developmentTip;
+          if (uniqueCommits.exitCode === 0 && Number(uniqueCommits.stdout) > 0) {
+            const remoteTip = await runGit(["rev-parse", `${pushBranch}^{commit}`], { cwd: path });
+            developmentTip = remoteTip.stdout;
+          }
+          if (developmentTip) {
+            const merged = await runGit(
+              ["merge-base", "--is-ancestor", developmentTip, defaultBranch],
+              { cwd: path, allowFailure: true },
+            );
+            if (merged.exitCode <= 1) mergedIntoDefault = merged.exitCode === 0;
+          } else mergedIntoDefault = false;
         }
         return {
           repositoryId: member.repositoryId,
           branch: currentBranch.stdout || (member.mode === "worktree" ? member.branch : "detached"),
           detached: member.mode === "worktree" && member.detached === true,
+          ...(developmentTip ? { developmentTip } : {}),
           ...(defaultBranch ? { defaultBranch } : {}),
           ...(ahead === undefined ? {} : { ahead }),
           ...(behind === undefined ? {} : { behind }),
           ...(upstream ? { upstream } : {}),
           ...(unpushed === undefined ? {} : { unpushed }),
+          ...(forcePushRequired === undefined ? {} : { forcePushRequired }),
           ...(mergedIntoDefault === undefined ? {} : { mergedIntoDefault }),
           changes: status.stdout ? status.stdout.split("\n") : [],
           conflicts: conflicts.stdout ? conflicts.stdout.split("\n") : [],
@@ -1373,7 +1480,6 @@ export async function getWorkspaceStatus(
     }),
   );
   const result = { workspaceId: workspace.id, checkedAt: new Date().toISOString(), members };
-  const statusRegistry = await readWorkspaceStatusRegistry(paths.workspaceStatuses);
   statusRegistry.statuses = [
     ...statusRegistry.statuses.filter(({ workspaceId }) => workspaceId !== workspace.id),
     result,

@@ -18,5 +18,6 @@ describe("devtool rpc", () => {
     expect(names).toContain("get-workspace-status");
     expect(names).toContain("open-workspace-member-in-vscode");
     expect(names).toContain("open-workspace-member-in-codex");
+    expect(names).toContain("wait-for-codex-turn");
   });
 });

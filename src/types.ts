@@ -32,6 +32,7 @@ export type WorkspaceMember =
       branch: string;
       worktreePath: string;
       detached?: true;
+      forcePushBase?: string;
     };
 
 export interface WorkspaceRecord {
@@ -171,15 +172,21 @@ export interface WorkspaceGitActionInput {
   repositoryId: RepositoryId;
 }
 
+export interface WorkspacePushInput extends WorkspaceGitActionInput {
+  force?: boolean;
+}
+
 export interface WorkspaceMemberStatus {
   repositoryId: RepositoryId;
   branch: string;
   detached: boolean;
+  developmentTip?: string;
   defaultBranch?: string;
   ahead?: number;
   behind?: number;
   upstream?: string;
   unpushed?: number;
+  forcePushRequired?: boolean;
   mergedIntoDefault?: boolean;
   changes: string[];
   conflicts: string[];
@@ -251,7 +258,7 @@ export interface RepositoryManager {
   promoteWorkspaceReference(input: PromoteWorkspaceReferenceInput): Promise<WorkspaceRecord>;
   convertWorkspaceToReference(input: ConvertWorkspaceToReferenceInput): Promise<WorkspaceRecord>;
   rebaseWorkspaceMember(input: WorkspaceGitActionInput): Promise<void>;
-  pushWorkspaceMember(input: WorkspaceGitActionInput): Promise<void>;
+  pushWorkspaceMember(input: WorkspacePushInput): Promise<void>;
   syncWorkspaceBranches(id: WorkspaceId): Promise<WorkspaceBranchSyncResult>;
   getWorkspaceStatus(id: WorkspaceId, fetchRemote?: boolean): Promise<WorkspaceStatusResult>;
   getWorkspaceStatuses(): Promise<WorkspaceStatusResult[]>;

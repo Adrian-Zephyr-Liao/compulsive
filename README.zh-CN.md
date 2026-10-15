@@ -93,6 +93,38 @@ cpl ui
 DevTool 通过 Devframe 在 localhost 提供带认证的页面，并自动打开浏览器。使用
 `cpl ui --no-open` 可以只启动服务、不新开标签页。
 
+## Workspace DevTool
+
+DevTool 是面向日常任务的 Workspace 控制台。仓库表格保留主要查看空间，常用操作集中在表格
+上方；远端状态不会后台轮询，只在用户主动检查时更新。
+
+![使用脱敏示例数据的 Compulsive Workspace DevTool](./docs/assets/compulsive-devtool-redacted.png)
+
+_截图中的工作区、仓库、远端地址、分支和磁盘路径均为虚构示例。_
+
+可以通过界面完成：
+
+- 新建 Workspace，或从现有 Workspace 中选择部分仓库进行克隆。
+- 将仓库作为隔离的开发 worktree 或 detached 参考代码加入 Workspace。
+- 指定、创建并随时切换开发分支；远端存在同名分支时自动建立跟踪关系。
+- 按任务需要在参考代码与开发 worktree 之间双向转换。
+- 从远端默认分支刷新参考代码，同时保持 detached，不额外创建本地分支。
+- 检查未提交文件、冲突、相对主分支的领先/落后、未推送提交，以及远端开发分支是否已经
+  合入主分支。
+- 批量同步干净的开发分支，并明确列出同步失败或产生冲突的仓库名称。
+- 随时在 VS Code 中打开仓库、在 ChatGPT 中打开 Workspace，或把冲突交给具备完整文件访问
+  权限的独立 Codex 聊天处理。
+
+最近一次检查结果会与 CPL 配置一起持久化，关闭浏览器或重启 DevTool 后仍然保留。需要最新
+远端状态时，主动点击**检查状态**即可。
+
+### Rebase 与 Push 安全
+
+普通分支分叉会先同步远端同名分支，再执行常规 Push。如果基于远端主分支 Rebase 后改写了
+已经推送过的提交，DevTool 会记录 Rebase 前的远端提交，显示红色的**Rebase 后需安全强推**
+状态，并阻止普通 Push。用户确认后，CPL 才会执行绑定该提交 SHA 的
+`--force-with-lease`；如果远端随后又出现新提交，Git 会拒绝推送，不会覆盖他人代码。
+
 批量迁移时，先登记扫描结果，再统一预演全部目标路径：
 
 ```bash
@@ -227,6 +259,7 @@ console.log(repository.absolutePath);
 - 整理操作会拒绝目标占用、嵌套仓库、过期路径和跨磁盘移动。
 - 移动后必须重新验证为 Git 仓库，才会更新索引。
 - Workspace link 在仓库移动后会自动同步；路径冲突时保留用户内容并返回诊断。
+- 改写远端分支历史时，必须显式确认绑定旧 SHA 的 `--force-with-lease`。
 - Workspace 删除只移除受管链接和干净 worktree，绝不删除 canonical 仓库。
 - `forget` 和仓库整理流程都不会删除仓库目录。
 
