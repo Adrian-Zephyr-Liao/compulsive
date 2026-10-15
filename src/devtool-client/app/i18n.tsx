@@ -1,0 +1,543 @@
+import type { Locale } from "antd/es/locale/index.js";
+import * as enUSModule from "antd/es/locale/en_US.js";
+import * as zhCNModule from "antd/es/locale/zh_CN.js";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
+
+export type AppLocale = "en-US" | "zh-CN";
+
+const enUS = enUSModule.default as unknown as Locale;
+const zhCN = zhCNModule.default as unknown as Locale;
+
+const zhMessages = {
+  "app.title": "Compulsive · 需求工作台",
+  "app.description": "按需求组织隔离的 Git 开发与参考仓库。",
+  "brand.subtitle": "需求工作台",
+  "language.label": "界面语言",
+  "language.zh": "中文",
+  "language.en": "English",
+  "common.cancel": "取消",
+  "common.more": "更多",
+  "common.open": "打开",
+  "common.add": "添加",
+  "common.development": "开发",
+  "common.reference": "参考",
+  "common.notAvailable": "—",
+  "sidebar.newRequirement": "新建需求",
+  "sidebar.searchRequirement": "搜索需求",
+  "sidebar.noMatches": "没有匹配项",
+  "sidebar.storageRoot": "存储根目录",
+  "header.requirement": "需求",
+  "summary.description": "一个需求聚合一组开发仓库与参考代码，保持分支上下文彼此隔离。",
+  "summary.repositories": "{count} 个仓库",
+  "summary.developmentBranches": "{count} 开发分支",
+  "summary.clone": "复制需求",
+  "summary.delete": "删除需求",
+  "repository.title": "仓库",
+  "repository.openChatgpt": "在 ChatGPT 中打开",
+  "repository.copyCommand": "复制 cd 命令",
+  "repository.batchSync": "批量同步",
+  "repository.batchSyncTip": "逐个同步干净的开发分支与参考仓库，冲突会保留在对应仓库中",
+  "repository.repairLinks": "修复需求链接",
+  "repository.add": "添加仓库",
+  "repository.statusFilter": "仓库状态筛选",
+  "repository.filterAll": "全部 {count}",
+  "repository.filterAttention": "需处理 {count}",
+  "repository.filterUnpushed": "待推送 {count}",
+  "repository.filterConflicts": "冲突 {count}",
+  "repository.mergedTip": "远端开发分支的最新提交已包含在对应主分支中",
+  "repository.mergedCount": "{count} 个分支已合入",
+  "repository.lastChecked": "最后检查：{time}",
+  "repository.notChecked": "尚未检查",
+  "repository.typeFilter": "仓库类型",
+  "repository.allTypes": "全部类型",
+  "repository.developmentRepositories": "开发仓库",
+  "repository.referenceRepositories": "参考仓库",
+  "repository.directoryLinks": "目录链接",
+  "repository.search": "搜索仓库名称或路径",
+  "repository.checkStatus": "检查状态",
+  "repository.noMatches": "没有匹配的仓库",
+  "repository.empty": "还没有仓库",
+  "table.repository": "仓库",
+  "table.branch": "分支",
+  "table.localStatus": "本地状态",
+  "table.type": "类型",
+  "table.actions": "操作",
+  "status.clickToCheck": "点击检查",
+  "status.conflicts": "{count} 个冲突",
+  "status.cannotCompare": "无法比较",
+  "status.mergedTip": "远端开发分支的最新提交已包含在主分支中",
+  "status.taskComplete": "已合入主分支 · 可开启新需求",
+  "status.remoteMerged": "远端已合入",
+  "status.behind": "↓ {count} 落后 {branch}",
+  "status.ahead": "↑ {count} 领先 {branch}",
+  "status.unpushed": "{count} 未推送",
+  "status.forcePushTip": "Rebase 改写了已推送的提交，需确认后使用 --force-with-lease",
+  "status.forcePushRequired": "Rebase 后需安全强推",
+  "status.synced": "已同步 {branch}",
+  "status.changes": "{count} 项未提交",
+  "status.clean": "无未提交变更",
+  "status.developmentBranch": "开发分支",
+  "status.referenceBranch": "参考 · {branch}",
+  "action.pullDefault": "拉取最新主分支",
+  "action.rebaseDefault": "Rebase 远端主分支",
+  "action.safeForcePush": "使用安全强推",
+  "action.syncAndPush": "同步并 Push 分支",
+  "action.promote": "转为开发分支",
+  "action.switchBranch": "切换开发分支",
+  "action.toReference": "转为参考",
+  "action.removeRequirement": "移出需求",
+  "action.resolveConflicts": "处理冲突",
+  "branch.placeholder": "选择已有分支或输入新分支",
+  "branch.createHint": "未找到时可直接输入并创建新分支",
+  "branch.localRemote": "本地 / 远端",
+  "branch.local": "本地",
+  "branch.remote": "远端",
+  "drawer.close": "关闭仓库状态详情",
+  "drawer.openVscode": "在 VS Code 中打开",
+  "drawer.conflictDetails": "冲突详情",
+  "drawer.localDetails": "本地详情",
+  "drawer.noChanges": "没有未提交变更",
+  "drawer.chooseMethod": "选择处理方式",
+  "drawer.methodDescription": "人工精确处理，或以完全访问权限创建普通 Codex 聊天交给 AI 处理。",
+  "drawer.manualVscode": "VS Code 人工处理",
+  "drawer.codexTip": "以完全访问权限创建可在 Codex 中继续查看的聊天，不新建项目",
+  "drawer.starting": "正在启动",
+  "drawer.codexRunning": "Codex 处理中",
+  "drawer.handToCodex": "交给 Codex 处理",
+  "drawer.conflictFiles": "冲突文件（{count}）",
+  "drawer.changes": "未提交变更（{count}）",
+  "add.title": "添加仓库",
+  "add.description": "选择仓库和开发分支，加入当前需求。",
+  "add.repository": "仓库",
+  "add.searchRepository": "搜索仓库",
+  "add.alias": "目录别名",
+  "add.aliasPlaceholder": "默认使用仓库名",
+  "add.branch": "开发分支",
+  "add.branchExtra": "已有本地分支直接使用；仅远端存在时自动关联；输入新名称则从远端主分支创建。",
+  "switch.currentBranch": "当前分支",
+  "switch.description": "在当前 worktree 内切换，不复制目录或文件。",
+  "switch.targetBranch": "目标开发分支",
+  "switch.branchExtra":
+    "已有本地分支直接切换；仅远端存在时自动关联；输入新名称则从当前 HEAD 创建。",
+  "switch.failed": "切换失败",
+  "confirm.default": "确认删除",
+  "confirm.defaultWarning": "未提交的改动会阻止删除，数据不会被强制丢弃。",
+  "confirm.acknowledge": "我已了解此操作不可撤销",
+  "requirement.clone": "复制需求",
+  "requirement.new": "新建需求",
+  "requirement.create": "创建需求",
+  "requirement.counts": "{development} 个开发分支 · {reference} 个仅参考",
+  "requirement.cloneDescription": "基于现有需求复制仓库配置，也可以加入其他已登记仓库。",
+  "requirement.createDescription": "创建一个独立需求，并按需关联已登记仓库。",
+  "requirement.source": "源需求",
+  "requirement.search": "搜索需求",
+  "requirement.name": "新需求名称",
+  "requirement.location": "创建位置：{path}",
+  "requirement.namePlaceholder": "例如 ruyi-feature",
+  "requirement.branchHint": "每个开发仓库都可选择已有本地/远端分支，或直接输入名称创建新分支。",
+  "requirement.selectRepositories": "选择仓库",
+  "requirement.selected": "已选 {count}",
+  "requirement.searchRepositories": "输入仓库名称或路径开始搜索",
+  "requirement.linkMode": "{alias} 关联模式",
+  "requirement.branchLabel": "{alias} 开发分支",
+  "requirement.noRepositoryMatches": "没有匹配的仓库",
+  "requirement.creatingDescription": "正在创建所选仓库的隔离 worktree…",
+  "requirement.fetchingDefault": "正在获取远端默认分支",
+  "requirement.cloneFailed": "复制失败",
+  "requirement.createFailed": "创建失败",
+  "connection.failed": "连接失败",
+  "connection.reconnecting": "正在重连",
+  "connection.connecting": "正在连接",
+  "connection.connected": "已连接",
+  "connection.unavailable": "无法连接 Devframe",
+  "connection.reconnectMessage": "正在重新连接 Devframe",
+  "connection.loadingRequirements": "正在读取需求",
+  "connection.emptyRequirements": "还没有需求，使用左侧按钮创建第一个需求。",
+  "connection.reconnectTimeout": "Devframe 重连超时。",
+  "connection.authorizationFailed": "Devframe 授权失败。",
+  "connection.replaced": "Devframe 连接已被替换。",
+  "connection.closed": "Devframe 连接已关闭。",
+  "connection.notStarted": "Devframe 连接尚未启动。",
+  "workspace.checkedNow": "刚刚检查",
+  "workspace.cachedStatus": "缓存状态",
+  "footer.persisted": "配置已持久化 · {path}",
+  "footer.currentRequirement": "当前需求：{path}",
+  "feedback.statusFailed": "状态刷新失败",
+  "feedback.actionFailed": "{action}失败",
+  "feedback.commandCopied": "已复制 cd 命令",
+  "feedback.copyFailed": "复制失败",
+  "feedback.syncRequirement": "同步需求",
+  "feedback.requirementSynced": "需求已同步",
+  "feedback.batchSync": "批量同步分支",
+  "feedback.repositoriesFailed": "{count} 个仓库同步失败",
+  "feedback.repositoriesConflicted": "{count} 个仓库产生冲突",
+  "feedback.batchComplete": "批量同步完成",
+  "feedback.batchSummary":
+    "{synced} 个已同步，{skipped} 个已跳过，{conflicts} 个冲突，{failed} 个失败。",
+  "feedback.batchFailed": "批量同步失败",
+  "feedback.batchTitle": "批量同步需求分支",
+  "feedback.batchIntro": "将逐个处理当前需求内由 CPL 管理的仓库：",
+  "feedback.batchRuleDevelopment": "开发分支合并远端同名分支和最新主分支，成功后推送",
+  "feedback.batchRuleReference": "参考仓库更新到最新主分支并保持 detached",
+  "feedback.batchRuleSkip": "未提交变更与已完成分支会跳过；冲突会保留以便后续处理",
+  "feedback.startSync": "开始同步",
+  "feedback.promoteFailed": "转换失败",
+  "feedback.addRepository": "添加仓库",
+  "feedback.requirementCreated":
+    "需求创建完成：{development} 个开发分支，{reference} 个参考 worktree",
+  "feedback.requirementCloned":
+    "需求复制完成：{development} 个开发分支，{reference} 个参考 worktree",
+  "feedback.deleteRequirement": "删除需求",
+  "feedback.toReference": "转为参考",
+  "feedback.removeRepository": "移除仓库",
+  "confirm.deleteTitle": "删除 {name}？",
+  "confirm.deleteMessage":
+    "将删除该需求、其干净的 worktree，以及磁盘上的整个需求目录。ChatGPT 暂无项目删除接口，如已添加需在应用中手动移除。",
+  "confirm.deleteWarning": "目录内所有文件都会永久删除；未提交的 worktree 改动会阻止删除。",
+  "confirm.permanentDelete": "永久删除",
+  "confirm.removeTitle": "移除 {name}？",
+  "confirm.removeMessage": "将从 {workspace} 移除该成员；未提交的改动会阻止操作。",
+  "confirm.referenceTitle": "将 {name} 转为参考？",
+  "confirm.referenceMessage":
+    "worktree 将切换到最新远端主分支的 detached HEAD；本地分支 {branch} 会保留。",
+  "confirm.referenceWarning": "存在未提交改动时会阻止转换，不会强制覆盖文件。",
+  "operation.openVscode": "打开 VS Code",
+  "operation.openedVscode": "已在 VS Code 中打开 {name}",
+  "operation.codexStarting": "正在创建 Codex 聊天…",
+  "operation.codexRunning": "Codex 正在处理冲突并提交…",
+  "operation.codexComplete": "Codex 已处理冲突并完成本地提交",
+  "operation.codexFailed": "Codex 处理失败",
+  "operation.codexTurnFailed": "Codex 任务执行失败。",
+  "operation.updateReference": "更新参考代码",
+  "operation.rebase": "Rebase 主分支",
+  "operation.referenceUpdated": "已拉取 {name} 的最新主分支",
+  "operation.repositoryUpdated": "已更新 {name}",
+  "operation.forcePush": "安全强制推送",
+  "operation.push": "同步并 Push 分支",
+  "operation.forcePushed": "已使用 --force-with-lease 推送 {name}",
+  "operation.pushed": "已同步并推送 {name}",
+  "operation.forcePushTitle": "Rebase 已改写远端分支历史",
+  "operation.forcePushMessage":
+    "普通 Push 会被远端拒绝。确认后将使用安全强推更新 {name} 的远端分支。",
+  "operation.forcePushDetail":
+    "实际执行 --force-with-lease；如果远端在 Rebase 后又有新提交，推送会自动停止，不会覆盖他人改动。",
+  "operation.openChatgpt": "打开 ChatGPT",
+  "operation.openedChatgpt": "已在 ChatGPT 中打开",
+  "branches.loadFailed": "读取分支失败，仍可手动输入：{error}",
+  "codex.prompt":
+    "请协助处理仓库 {name} 当前需求内的 Git 冲突。\n\n工作目录：{path}\n当前分支：{branch}\n冲突文件：\n{conflicts}\n\n处理要求：\n1. 先检查 git status 和冲突两侧内容，理解现有业务意图后逐文件合并。\n2. 如果当前处于 rebase，且冲突很多或会在多个提交中反复解决，先确认原始状态可恢复，再执行 git rebase --abort，改为 git merge 远端主分支后解决冲突。\n3. 保留双方有效改动，不使用 git checkout --ours/--theirs 批量覆盖。\n4. 直接在当前工作目录处理，不创建新的项目、需求目录、分支或 worktree。\n5. 解决全部冲突后执行 git add，并完成本地提交；如果继续 rebase，应完成必要的 rebase --continue，确保最终 HEAD 已提交，不创建空提交。提交信息遵循仓库现有规范。\n6. 不要 push、reset、clean，也不要清理原有未提交内容。\n7. 运行与改动相关的最小验证，最后报告提交 SHA、验证结果和每个冲突的处理依据。",
+} as const;
+
+const enMessages: Record<keyof typeof zhMessages, string> = {
+  "app.title": "Compulsive · Requirements",
+  "app.description": "Organize isolated Git development and reference repositories by requirement.",
+  "brand.subtitle": "Requirement Manager",
+  "language.label": "Language",
+  "language.zh": "中文",
+  "language.en": "English",
+  "common.cancel": "Cancel",
+  "common.more": "More",
+  "common.open": "Open",
+  "common.add": "Add",
+  "common.development": "Development",
+  "common.reference": "Reference",
+  "common.notAvailable": "—",
+  "sidebar.newRequirement": "New requirement",
+  "sidebar.searchRequirement": "Search requirements",
+  "sidebar.noMatches": "No matches",
+  "sidebar.storageRoot": "Storage root",
+  "header.requirement": "Requirements",
+  "summary.description":
+    "Group development repositories and reference code by requirement while keeping branch contexts isolated.",
+  "summary.repositories": "{count} repositories",
+  "summary.developmentBranches": "{count} development branches",
+  "summary.clone": "Clone requirement",
+  "summary.delete": "Delete requirement",
+  "repository.title": "Repositories",
+  "repository.openChatgpt": "Open in ChatGPT",
+  "repository.copyCommand": "Copy cd command",
+  "repository.batchSync": "Sync all",
+  "repository.batchSyncTip":
+    "Sync clean development branches and references one by one. Conflicts remain in their repositories.",
+  "repository.repairLinks": "Repair requirement links",
+  "repository.add": "Add repository",
+  "repository.statusFilter": "Repository status filter",
+  "repository.filterAll": "All {count}",
+  "repository.filterAttention": "Needs attention {count}",
+  "repository.filterUnpushed": "Unpushed {count}",
+  "repository.filterConflicts": "Conflicts {count}",
+  "repository.mergedTip":
+    "The latest remote development branch commit is included in its default branch",
+  "repository.mergedCount": "{count} branches merged",
+  "repository.lastChecked": "Last checked: {time}",
+  "repository.notChecked": "Not checked",
+  "repository.typeFilter": "Repository type",
+  "repository.allTypes": "All types",
+  "repository.developmentRepositories": "Development",
+  "repository.referenceRepositories": "Reference",
+  "repository.directoryLinks": "Directory links",
+  "repository.search": "Search repository name or path",
+  "repository.checkStatus": "Check status",
+  "repository.noMatches": "No matching repositories",
+  "repository.empty": "No repositories yet",
+  "table.repository": "Repository",
+  "table.branch": "Branch",
+  "table.localStatus": "Local status",
+  "table.type": "Type",
+  "table.actions": "Actions",
+  "status.clickToCheck": "Check status",
+  "status.conflicts": "{count} conflicts",
+  "status.cannotCompare": "Unable to compare",
+  "status.mergedTip":
+    "The latest remote development branch commit is included in the default branch",
+  "status.taskComplete": "Merged · Ready for a new requirement",
+  "status.remoteMerged": "Remote merged",
+  "status.behind": "↓ {count} behind {branch}",
+  "status.ahead": "↑ {count} ahead of {branch}",
+  "status.unpushed": "{count} unpushed",
+  "status.forcePushTip": "Rebase rewrote pushed commits. Confirm before using --force-with-lease.",
+  "status.forcePushRequired": "Safe force push required",
+  "status.synced": "Synced with {branch}",
+  "status.changes": "{count} uncommitted",
+  "status.clean": "Working tree clean",
+  "status.developmentBranch": "Development branch",
+  "status.referenceBranch": "Reference · {branch}",
+  "action.pullDefault": "Pull latest default branch",
+  "action.rebaseDefault": "Rebase onto default branch",
+  "action.safeForcePush": "Safe force push",
+  "action.syncAndPush": "Sync and push branch",
+  "action.promote": "Convert to development",
+  "action.switchBranch": "Switch development branch",
+  "action.toReference": "Convert to reference",
+  "action.removeRequirement": "Remove from requirement",
+  "action.resolveConflicts": "Resolve conflicts",
+  "branch.placeholder": "Select an existing branch or enter a new one",
+  "branch.createHint": "Enter a branch name to create it when no match is found",
+  "branch.localRemote": "Local / Remote",
+  "branch.local": "Local",
+  "branch.remote": "Remote",
+  "drawer.close": "Close repository status details",
+  "drawer.openVscode": "Open in VS Code",
+  "drawer.conflictDetails": "Conflict details",
+  "drawer.localDetails": "Local details",
+  "drawer.noChanges": "No uncommitted changes",
+  "drawer.chooseMethod": "Choose a resolution method",
+  "drawer.methodDescription":
+    "Resolve precisely in VS Code, or start a full-access Codex chat for AI assistance.",
+  "drawer.manualVscode": "Resolve in VS Code",
+  "drawer.codexTip": "Start a full-access Codex chat without creating a new project",
+  "drawer.starting": "Starting",
+  "drawer.codexRunning": "Codex is working",
+  "drawer.handToCodex": "Ask Codex to resolve",
+  "drawer.conflictFiles": "Conflict files ({count})",
+  "drawer.changes": "Uncommitted changes ({count})",
+  "add.title": "Add repository",
+  "add.description": "Choose a repository and development branch for this requirement.",
+  "add.repository": "Repository",
+  "add.searchRepository": "Search repositories",
+  "add.alias": "Directory alias",
+  "add.aliasPlaceholder": "Use repository name by default",
+  "add.branch": "Development branch",
+  "add.branchExtra":
+    "Use an existing local branch, track a remote branch, or enter a new branch to create from the remote default branch.",
+  "switch.currentBranch": "Current branch",
+  "switch.description": "Switch inside the current worktree without copying files.",
+  "switch.targetBranch": "Target development branch",
+  "switch.branchExtra":
+    "Switch to a local branch, track a remote branch, or enter a new branch to create from HEAD.",
+  "switch.failed": "Switch failed",
+  "confirm.default": "Confirm deletion",
+  "confirm.defaultWarning": "Uncommitted changes block deletion; data is never forcibly discarded.",
+  "confirm.acknowledge": "I understand this action cannot be undone",
+  "requirement.clone": "Clone requirement",
+  "requirement.new": "New requirement",
+  "requirement.create": "Create requirement",
+  "requirement.counts": "{development} development · {reference} reference",
+  "requirement.cloneDescription":
+    "Clone repository settings from an existing requirement and optionally add other registered repositories.",
+  "requirement.createDescription":
+    "Create an isolated requirement and link registered repositories as needed.",
+  "requirement.source": "Source requirement",
+  "requirement.search": "Search requirements",
+  "requirement.name": "New requirement name",
+  "requirement.location": "Location: {path}",
+  "requirement.namePlaceholder": "For example, ruyi-feature",
+  "requirement.branchHint":
+    "Each development repository can use a local or remote branch, or a newly entered branch name.",
+  "requirement.selectRepositories": "Select repositories",
+  "requirement.selected": "{count} selected",
+  "requirement.searchRepositories": "Enter a repository name or path to search",
+  "requirement.linkMode": "Link mode for {alias}",
+  "requirement.branchLabel": "Development branch for {alias}",
+  "requirement.noRepositoryMatches": "No matching repositories",
+  "requirement.creatingDescription": "Creating isolated worktrees for the selected repositories…",
+  "requirement.fetchingDefault": "Fetching remote default branches",
+  "requirement.cloneFailed": "Clone failed",
+  "requirement.createFailed": "Creation failed",
+  "connection.failed": "Connection failed",
+  "connection.reconnecting": "Reconnecting",
+  "connection.connecting": "Connecting",
+  "connection.connected": "Connected",
+  "connection.unavailable": "Unable to connect to Devframe",
+  "connection.reconnectMessage": "Reconnecting to Devframe",
+  "connection.loadingRequirements": "Loading requirements",
+  "connection.emptyRequirements": "No requirements yet. Create the first one from the sidebar.",
+  "connection.reconnectTimeout": "Devframe reconnect timed out.",
+  "connection.authorizationFailed": "Devframe authorization failed.",
+  "connection.replaced": "The Devframe connection was replaced.",
+  "connection.closed": "The Devframe connection closed.",
+  "connection.notStarted": "The Devframe connection has not started.",
+  "workspace.checkedNow": "Checked just now",
+  "workspace.cachedStatus": "Cached status",
+  "footer.persisted": "Configuration persisted · {path}",
+  "footer.currentRequirement": "Current requirement: {path}",
+  "feedback.statusFailed": "Status refresh failed",
+  "feedback.actionFailed": "{action} failed",
+  "feedback.commandCopied": "cd command copied",
+  "feedback.copyFailed": "Copy failed",
+  "feedback.syncRequirement": "Sync requirement",
+  "feedback.requirementSynced": "Requirement synced",
+  "feedback.batchSync": "Sync requirement branches",
+  "feedback.repositoriesFailed": "{count} repositories failed to sync",
+  "feedback.repositoriesConflicted": "{count} repositories have conflicts",
+  "feedback.batchComplete": "Batch sync complete",
+  "feedback.batchSummary":
+    "{synced} synced, {skipped} skipped, {conflicts} conflicts, {failed} failed.",
+  "feedback.batchFailed": "Batch sync failed",
+  "feedback.batchTitle": "Sync requirement branches",
+  "feedback.batchIntro": "CPL will process each managed repository in this requirement:",
+  "feedback.batchRuleDevelopment":
+    "Merge the same-name remote branch and latest default branch, then push",
+  "feedback.batchRuleReference":
+    "Update references to the latest default branch while remaining detached",
+  "feedback.batchRuleSkip":
+    "Skip uncommitted and completed branches; preserve conflicts for resolution",
+  "feedback.startSync": "Start sync",
+  "feedback.promoteFailed": "Conversion failed",
+  "feedback.addRepository": "Add repository",
+  "feedback.requirementCreated":
+    "Requirement created: {development} development · {reference} reference worktrees",
+  "feedback.requirementCloned":
+    "Requirement cloned: {development} development · {reference} reference worktrees",
+  "feedback.deleteRequirement": "Delete requirement",
+  "feedback.toReference": "Convert to reference",
+  "feedback.removeRepository": "Remove repository",
+  "confirm.deleteTitle": "Delete {name}?",
+  "confirm.deleteMessage":
+    "This deletes the requirement, its clean worktrees, and the entire requirement directory on disk. ChatGPT projects must still be removed manually.",
+  "confirm.deleteWarning":
+    "All files in the directory are permanently deleted. Uncommitted worktree changes block deletion.",
+  "confirm.permanentDelete": "Delete permanently",
+  "confirm.removeTitle": "Remove {name}?",
+  "confirm.removeMessage":
+    "Remove this member from {workspace}. Uncommitted changes block the operation.",
+  "confirm.referenceTitle": "Convert {name} to a reference?",
+  "confirm.referenceMessage":
+    "The worktree switches to the latest remote default branch in detached HEAD. Local branch {branch} is preserved.",
+  "confirm.referenceWarning":
+    "Uncommitted changes block conversion; files are never forcibly overwritten.",
+  "operation.openVscode": "Open VS Code",
+  "operation.openedVscode": "Opened {name} in VS Code",
+  "operation.codexStarting": "Starting a Codex chat…",
+  "operation.codexRunning": "Codex is resolving and committing conflicts…",
+  "operation.codexComplete": "Codex resolved the conflicts and created a local commit",
+  "operation.codexFailed": "Codex resolution failed",
+  "operation.codexTurnFailed": "The Codex task failed.",
+  "operation.updateReference": "Update reference",
+  "operation.rebase": "Rebase default branch",
+  "operation.referenceUpdated": "Updated {name} to the latest default branch",
+  "operation.repositoryUpdated": "Updated {name}",
+  "operation.forcePush": "Safe force push",
+  "operation.push": "Sync and push branch",
+  "operation.forcePushed": "Pushed {name} with --force-with-lease",
+  "operation.pushed": "Synced and pushed {name}",
+  "operation.forcePushTitle": "Rebase rewrote remote branch history",
+  "operation.forcePushMessage":
+    "A normal push will be rejected. Confirm to safely force-push the remote branch for {name}.",
+  "operation.forcePushDetail":
+    "Uses --force-with-lease. The push stops instead of overwriting others if new remote commits appeared after the rebase.",
+  "operation.openChatgpt": "Open ChatGPT",
+  "operation.openedChatgpt": "Opened in ChatGPT",
+  "branches.loadFailed": "Unable to load branches; manual input is still available: {error}",
+  "codex.prompt":
+    "Please resolve the Git conflicts in repository {name} for the current requirement.\n\nWorking directory: {path}\nCurrent branch: {branch}\nConflicted files:\n{conflicts}\n\nRequirements:\n1. Inspect git status and both sides of every conflict before merging by business intent.\n2. If a rebase produces many or repeated conflicts, confirm the original state is recoverable, abort the rebase, and merge the remote default branch instead.\n3. Preserve valid changes from both sides. Do not apply git checkout --ours/--theirs across all files.\n4. Work directly in the current directory. Do not create a project, requirement directory, branch, or worktree.\n5. Stage every resolved conflict and finish with a local commit. If continuing a rebase, complete the required rebase --continue steps and ensure HEAD is committed. Follow the repository's commit conventions.\n6. Do not push, reset, clean, or discard existing uncommitted work.\n7. Run the smallest relevant verification and report the commit SHA, results, and resolution rationale for each conflict.",
+};
+
+export type MessageKey = keyof typeof zhMessages;
+export type Translate = (key: MessageKey, variables?: Record<string, string | number>) => string;
+
+const localeStorageKey = "compulsive.locale";
+
+export function translate(
+  locale: AppLocale,
+  key: MessageKey,
+  variables: Record<string, string | number> = {},
+): string {
+  const message = (locale === "zh-CN" ? zhMessages : enMessages)[key];
+  return message.replace(/\{(\w+)\}/g, (placeholder, name: string) =>
+    name in variables ? String(variables[name]) : placeholder,
+  );
+}
+
+function detectLocale(): AppLocale {
+  try {
+    const stored = window.localStorage.getItem(localeStorageKey);
+    if (stored === "en-US" || stored === "zh-CN") return stored;
+  } catch {
+    // The browser language remains a safe fallback when storage is unavailable.
+  }
+  return window.navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US";
+}
+
+interface I18nContextValue {
+  antdLocale: Locale;
+  locale: AppLocale;
+  setLocale: (locale: AppLocale) => void;
+  t: Translate;
+  formatDateTime: (value: string | number | Date) => string;
+}
+
+const I18nContext = createContext<I18nContextValue | undefined>(undefined);
+
+export function LanguageProvider({ children }: { children: ReactNode }) {
+  const [locale, setLocaleState] = useState<AppLocale>(detectLocale);
+  const setLocale = useCallback((nextLocale: AppLocale) => {
+    try {
+      window.localStorage.setItem(localeStorageKey, nextLocale);
+    } catch {
+      // The current session can still switch languages without persistence.
+    }
+    setLocaleState(nextLocale);
+  }, []);
+  const t = useCallback<Translate>((key, variables) => translate(locale, key, variables), [locale]);
+  const value = useMemo<I18nContextValue>(
+    () => ({
+      antdLocale: locale === "zh-CN" ? zhCN : enUS,
+      locale,
+      setLocale,
+      t,
+      formatDateTime: (date) =>
+        new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "medium" }).format(
+          new Date(date),
+        ),
+    }),
+    [locale, setLocale, t],
+  );
+
+  useEffect(() => {
+    document.documentElement.lang = locale;
+    document.title = t("app.title");
+    document
+      .querySelector('meta[name="description"]')
+      ?.setAttribute("content", t("app.description"));
+  }, [locale, t]);
+
+  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
+}
+
+export function useI18n(): I18nContextValue {
+  const context = useContext(I18nContext);
+  if (!context) throw new Error("useI18n must be used inside LanguageProvider.");
+  return context;
+}

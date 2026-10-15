@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Compulsive">
+  <defs>
+    <linearGradient id="brand" x1="7" y1="5" x2="41" y2="43" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7771F7"/>
+      <stop offset="1" stop-color="#4F49D8"/>
+    </linearGradient>
+  </defs>
+  <rect width="48" height="48" rx="12" fill="url(#brand)"/>
+  <path d="M19 24h7.5M25 24c3.5 0 3.5-10 7-10M25 24c3.5 0 3.5 10 7 10" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="16" cy="24" r="5" fill="#fff"/>
+  <circle cx="34" cy="14" r="3" fill="#fff"/>
+  <circle cx="34" cy="24" r="3" fill="#fff"/>
+  <circle cx="34" cy="34" r="3" fill="#fff"/>
+  <circle cx="16" cy="24" r="1.75" fill="#5B55E7"/>
+</svg>

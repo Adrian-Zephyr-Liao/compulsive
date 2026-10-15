@@ -8,6 +8,8 @@ import {
 } from "@ant-design/icons";
 import { Button, Dropdown, Space, Tooltip, Typography } from "antd";
 
+import { useI18n } from "../../../app/i18n.js";
+
 const { Text, Title } = Typography;
 
 export interface WorkspaceSummaryProps {
@@ -31,6 +33,7 @@ export function WorkspaceSummary({
   onClone,
   onDelete,
 }: WorkspaceSummaryProps) {
+  const { t } = useI18n();
   return (
     <section className="box-border grid min-h-[152px] grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-4 rounded-lg border border-[var(--ant-color-border-secondary)] bg-[var(--ant-color-bg-container)] px-5 py-4">
       <div className="grid size-12 place-items-center rounded-lg bg-[var(--ant-color-primary-bg)] text-2xl text-[var(--ant-color-primary)]">
@@ -46,7 +49,7 @@ export function WorkspaceSummary({
           </Text>
         </Tooltip>
         <Text className="mt-2" type="secondary">
-          隔离管理开发仓库与参考代码，保持每个任务的分支上下文独立。
+          {t("summary.description")}
         </Text>
         <Space
           className="mt-3 [&_.anticon]:mr-2 [&_.anticon]:!text-[var(--ant-color-text-secondary)]"
@@ -54,10 +57,10 @@ export function WorkspaceSummary({
           wrap
         >
           <Text>
-            <DatabaseOutlined /> {memberCount} 个仓库
+            <DatabaseOutlined /> {t("summary.repositories", { count: memberCount })}
           </Text>
           <Text>
-            <BranchesOutlined /> {developmentCount} 开发分支
+            <BranchesOutlined /> {t("summary.developmentBranches", { count: developmentCount })}
           </Text>
           <Text>
             <ClockCircleOutlined /> {statusLabel}
@@ -71,7 +74,7 @@ export function WorkspaceSummary({
           size="large"
           onClick={onClone}
         >
-          克隆工作区
+          {t("summary.clone")}
         </Button>
         <Dropdown
           menu={{
@@ -80,7 +83,7 @@ export function WorkspaceSummary({
                 key: "delete",
                 danger: true,
                 icon: <DeleteOutlined />,
-                label: "删除工作区",
+                label: t("summary.delete"),
               },
             ],
             onClick: ({ key }) => {
@@ -90,7 +93,7 @@ export function WorkspaceSummary({
           trigger={["click"]}
         >
           <Button icon={<MoreOutlined />} size="large">
-            更多
+            {t("common.more")}
           </Button>
         </Dropdown>
       </Space>

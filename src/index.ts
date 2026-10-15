@@ -16,6 +16,7 @@ export type {
   RegisterRepositoryInput,
   RemoveWorkspaceMemberInput,
   RepositoryClassification,
+  RepositoryBranch,
   RepositoryId,
   RepositoryKind,
   RepositoryManager,

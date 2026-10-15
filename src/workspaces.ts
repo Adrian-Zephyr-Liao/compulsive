@@ -390,6 +390,14 @@ async function assertCleanWorktree(memberPath: string): Promise<void> {
   }
 }
 
+async function localBranchExists(repositoryPath: string, branch: string): Promise<boolean> {
+  const result = await runGit(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
+    cwd: repositoryPath,
+    allowFailure: true,
+  });
+  return result.exitCode === 0;
+}
+
 async function addGitWorktree(
   repositoryPath: string,
   worktreePath: string,
@@ -675,7 +683,9 @@ export async function addWorkspaceMember(
       );
     }
     await ensureManagedWorktreeRoot(repository.absolutePath);
-    const createBranch = !detached && (explicitBranch === undefined || input.createBranch === true);
+    const existingBranch = !detached && (await localBranchExists(repository.absolutePath, branch));
+    const createBranch =
+      !detached && !existingBranch && (explicitBranch === undefined || input.createBranch === true);
     const remoteBranch = createBranch
       ? await fetchConfiguredOriginBranch(repository.absolutePath, branch)
       : undefined;
@@ -781,13 +791,43 @@ export async function cloneWorkspace(
     throw new CompulsiveError("INVALID_INPUT", "Clone branch name is required.");
   }
   const referenceIds = new Set(referenceRepositoryIds);
+  const repositoryBranches = input.repositoryBranches ?? [];
+  if (
+    new Set(repositoryBranches.map(({ repositoryId }) => repositoryId)).size !==
+    repositoryBranches.length
+  ) {
+    throw new CompulsiveError("INVALID_INPUT", "Repository branch selection contains duplicates.");
+  }
+  const branches = new Map(
+    repositoryBranches.map(({ repositoryId, branch }) => {
+      if (!selectedIds.has(repositoryId)) {
+        throw new CompulsiveError(
+          "INVALID_INPUT",
+          "Every repository branch must belong to the selected repositories.",
+        );
+      }
+      if (referenceIds.has(repositoryId)) {
+        throw new CompulsiveError(
+          "INVALID_INPUT",
+          "Reference repositories cannot specify a development branch.",
+        );
+      }
+      const value = branch.trim();
+      if (!value) {
+        throw new CompulsiveError("INVALID_INPUT", "Repository branch name is required.");
+      }
+      return [repositoryId, value] as const;
+    }),
+  );
 
   const [config, workspaceRegistry, repositoryRegistry] = await Promise.all([
     readConfig(paths.config),
     readWorkspaceRegistry(paths.workspaces),
     readRegistry(paths.registry),
   ]);
-  const { workspace: source } = findWorkspace(workspaceRegistry, input.sourceWorkspaceId);
+  const source = input.sourceWorkspaceId
+    ? findWorkspace(workspaceRegistry, input.sourceWorkspaceId).workspace
+    : undefined;
   const targetPath = resolve(join(config.workspaceRoot, name));
   if (
     workspaceRegistry.workspaces.some(
@@ -806,30 +846,28 @@ export async function cloneWorkspace(
   }
 
   const selected = input.repositoryIds.map((repositoryId) => {
-    const member = source.members.find((candidate) => candidate.repositoryId === repositoryId);
-    if (!member) {
-      throw new CompulsiveError(
-        "INVALID_INPUT",
-        "Every selected repository must belong to the source Workspace.",
-      );
-    }
+    const repository = findRepository(repositoryRegistry.repositories, repositoryId);
+    const member = source?.members.find((candidate) => candidate.repositoryId === repositoryId);
     return {
-      member,
-      repository: findRepository(repositoryRegistry.repositories, repositoryId),
+      alias: member?.alias ?? repository.name,
+      repository,
       startPoint: "",
       reference: referenceIds.has(repositoryId),
+      branch: branches.get(repositoryId) ?? branchName,
     };
   });
 
-  if (branchName) {
-    const developmentRepository = selected.find((candidate) => !candidate.reference)?.repository;
-    if (developmentRepository) {
-      const validBranch = await runGit(["check-ref-format", "--branch", branchName], {
-        cwd: developmentRepository.absolutePath,
+  for (const candidate of selected) {
+    if (candidate.branch && !candidate.reference) {
+      const validBranch = await runGit(["check-ref-format", "--branch", candidate.branch], {
+        cwd: candidate.repository.absolutePath,
         allowFailure: true,
       });
       if (validBranch.exitCode !== 0) {
-        throw new CompulsiveError("INVALID_INPUT", `Invalid clone branch name: ${branchName}`);
+        throw new CompulsiveError(
+          "INVALID_INPUT",
+          `Invalid clone branch name for ${candidate.repository.name}: ${candidate.branch}`,
+        );
       }
     }
   }
@@ -867,19 +905,20 @@ export async function cloneWorkspace(
   const createdBranches: Array<{ repositoryPath: string; branch: string }> = [];
   try {
     let current = target;
-    for (const { member, repository, startPoint, reference } of selected) {
+    for (const { alias, repository, startPoint, reference, branch } of selected) {
+      const existingBranch = branch
+        ? await localBranchExists(repository.absolutePath, branch)
+        : false;
       current = await addWorkspaceMember(paths, {
         workspaceId: target.id,
         repositoryId: repository.id,
-        alias: member.alias,
+        alias,
         mode: "worktree",
-        ...(reference
-          ? { detached: true }
-          : { ...(branchName ? { branch: branchName } : {}), createBranch: true }),
+        ...(reference ? { detached: true } : { ...(branch ? { branch } : {}), createBranch: true }),
         startPoint,
       });
       const created = current.members.at(-1);
-      if (created?.mode === "worktree" && !created.detached) {
+      if (created?.mode === "worktree" && !created.detached && !existingBranch) {
         createdBranches.push({ repositoryPath: repository.absolutePath, branch: created.branch });
       }
     }

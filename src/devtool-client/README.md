@@ -17,6 +17,28 @@ src/devtool-client/
 - `shared/ui/`: reusable wrappers around Ant Design with no workspace vocabulary.
 - `styles/`: the Tailwind entrypoint and scoped structural CSS that cannot be expressed clearly with Ant Design tokens or short utility classes.
 
+The workspace feature is split by responsibility:
+
+```text
+features/workspaces/
+├── WorkspaceApp.tsx        page orchestration and cross-feature commands
+├── components/             presentational sections and the repository table
+│   └── dialogs/            modal forms and confirmations
+├── hooks/                  RPC connection, status, drafts, and repository operations
+├── utils/                  pure selectors and error formatting
+└── types.ts                feature-local contracts
+```
+
+Keep RPC lifecycle and async side effects in hooks, pure status decisions in selectors, and Ant Design rendering in components. `WorkspaceApp` coordinates these pieces; it should not contain table cell markup or modal form internals.
+
+## Internationalization
+
+- All user-visible frontend text belongs in `app/i18n.tsx`; components use `useI18n()` rather than inline copy.
+- Chinese and English keys are type-checked against the same catalog, and interpolated values use named placeholders.
+- `ConfigProvider.locale` follows the selected app locale so Ant Design's built-in labels change with the product copy.
+- Dates use `formatDateTime()` from the locale context. Keep raw RPC and Git values unchanged.
+- The locale switch is a UI preference stored under `compulsive.locale`; workspace and repository state remain in CPL storage.
+
 ## Styling rules
 
 1. Ant Design components remain the control primitives. Configure color, radius, typography, and component defaults through `ConfigProvider` tokens.

@@ -1,46 +1,32 @@
-import {
-  DatabaseOutlined,
-  FolderAddOutlined,
-  FolderOutlined,
-  PlusOutlined,
-  SearchOutlined,
-} from "@ant-design/icons";
-import { Button, Empty, Flex, Form, Input, Layout, Menu, Space, Tooltip, Typography } from "antd";
+import { DatabaseOutlined, FolderOutlined, PlusOutlined, SearchOutlined } from "@ant-design/icons";
+import { Button, Empty, Flex, Input, Layout, Menu, Space, Tooltip, Typography } from "antd";
 
+import { useI18n } from "../../../app/i18n.js";
 import type { DevtoolWorkspace } from "../../../../devtool.js";
 
 const { Sider } = Layout;
 const { Text, Title } = Typography;
 
 export interface WorkspaceSidebarProps {
-  busy: boolean;
   filteredWorkspaces: DevtoolWorkspace[];
-  newWorkspaceName: string;
   selectedWorkspaceId: string | undefined;
-  showCreate: boolean;
   workspaceQuery: string;
   workspaceRoot: string;
-  onCreateWorkspace: () => void;
-  onNewWorkspaceNameChange: (value: string) => void;
+  onOpenCreate: () => void;
   onSelectWorkspace: (id: string) => void;
-  onToggleCreate: () => void;
   onWorkspaceQueryChange: (value: string) => void;
 }
 
 export function WorkspaceSidebar({
-  busy,
   filteredWorkspaces,
-  newWorkspaceName,
   selectedWorkspaceId,
-  showCreate,
   workspaceQuery,
   workspaceRoot,
-  onCreateWorkspace,
-  onNewWorkspaceNameChange,
+  onOpenCreate,
   onSelectWorkspace,
-  onToggleCreate,
   onWorkspaceQueryChange,
 }: WorkspaceSidebarProps) {
+  const { t } = useI18n();
   return (
     <Sider
       className="relative z-[2] overflow-hidden border-r border-[var(--ant-color-split)] !bg-linear-to-b from-white/70 to-[#f8f9fd]"
@@ -49,62 +35,24 @@ export function WorkspaceSidebar({
     >
       <Flex className="h-full" vertical>
         <div className="flex min-h-18 items-center gap-3 px-5 pt-3 pb-2">
-          <div
-            aria-hidden="true"
-            className="grid size-10 place-items-center rounded-lg bg-linear-to-br from-[#6f68f4] to-[#4d47d7] text-xl font-semibold text-white shadow-[0_6px_16px_rgba(91,85,231,0.2)]"
-          >
-            C
-          </div>
+          <img alt="Compulsive" className="size-10 shrink-0" src="./compulsive-logo.svg" />
           <div>
             <Title className="!m-0" level={4}>
               Compulsive
             </Title>
-            <Text type="secondary">Workspace Manager</Text>
+            <Text type="secondary">{t("brand.subtitle")}</Text>
           </div>
         </div>
         <div className="grid gap-3 px-5 pt-2 pb-3">
-          <Button
-            block
-            icon={<PlusOutlined />}
-            size="large"
-            type="primary"
-            onClick={onToggleCreate}
-          >
-            新建工作区
+          <Button block icon={<PlusOutlined />} size="large" type="primary" onClick={onOpenCreate}>
+            {t("sidebar.newRequirement")}
           </Button>
-          {showCreate && (
-            <Form
-              className="rounded-lg border border-[var(--ant-color-border-secondary)] bg-[var(--ant-color-bg-container)] p-4"
-              layout="vertical"
-              onFinish={onCreateWorkspace}
-            >
-              <Form.Item className="!mb-2" label="工作区名称" required>
-                <Input
-                  autoFocus
-                  id="new-workspace-name"
-                  name="workspaceName"
-                  placeholder="例如 feature-report"
-                  prefix={<FolderAddOutlined />}
-                  value={newWorkspaceName}
-                  onChange={(event) => onNewWorkspaceNameChange(event.target.value)}
-                />
-              </Form.Item>
-              <Button
-                block
-                disabled={!newWorkspaceName.trim() || busy}
-                htmlType="submit"
-                type="primary"
-              >
-                创建
-              </Button>
-            </Form>
-          )}
           <Input
             allowClear
-            aria-label="搜索工作区"
+            aria-label={t("sidebar.searchRequirement")}
             id="workspace-search"
             name="workspaceSearch"
-            placeholder="搜索工作区"
+            placeholder={t("sidebar.searchRequirement")}
             prefix={<SearchOutlined />}
             size="large"
             value={workspaceQuery}
@@ -139,7 +87,11 @@ export function WorkspaceSidebar({
             onClick={({ key }) => onSelectWorkspace(key)}
           />
         ) : (
-          <Empty className="mt-8" description="没有匹配项" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          <Empty
+            className="mt-8"
+            description={t("sidebar.noMatches")}
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+          />
         )}
         <div className="mt-auto border-t border-[var(--ant-color-split)] px-5 pt-3 pb-4">
           <Space
@@ -148,7 +100,7 @@ export function WorkspaceSidebar({
           >
             <DatabaseOutlined className="mt-1 shrink-0" />
             <Space className="w-full min-w-0" orientation="vertical" size={0}>
-              <Text type="secondary">存储根目录</Text>
+              <Text type="secondary">{t("sidebar.storageRoot")}</Text>
               <Tooltip title={workspaceRoot}>
                 <Text className="block w-full !text-xs" ellipsis>
                   {workspaceRoot || "—"}

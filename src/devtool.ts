@@ -13,6 +13,7 @@ import { CompulsiveError } from "./errors.js";
 import { formatCdCommand } from "./shell.js";
 import type {
   RepositoryId,
+  RepositoryBranch,
   RepositoryManager,
   RepositoryRecord,
   ManagerConfig,
@@ -90,6 +91,17 @@ export function createServerFunctions(manager: RepositoryManager) {
     handler: ({ name }): Promise<WorkspaceRecord> => manager.createWorkspace({ name }),
   });
 
+  const getRepositoryBranches = defineRpcFunction({
+    name: "get-repository-branches",
+    type: "query",
+    jsonSerializable: true,
+    args: [s.object({ repositoryId: s.string() })],
+    returns: objectResult<{ branches: RepositoryBranch[] }>(),
+    handler: async ({ repositoryId }): Promise<{ branches: RepositoryBranch[] }> => ({
+      branches: await manager.getRepositoryBranches(repositoryId as RepositoryId),
+    }),
+  });
+
   const addWorkspaceMember = defineRpcFunction({
     name: "add-workspace-member",
     type: "action",
@@ -121,20 +133,40 @@ export function createServerFunctions(manager: RepositoryManager) {
     jsonSerializable: true,
     args: [
       s.object({
-        sourceWorkspaceId: s.string(),
+        sourceWorkspaceId: s.optional(s.string()),
         name: s.string(),
         repositoryIds: s.array(s.string()),
         branchName: s.optional(s.string()),
+        repositoryBranches: s.optional(
+          s.array(s.object({ repositoryId: s.string(), branch: s.string() })),
+        ),
         referenceRepositoryIds: s.optional(s.array(s.string())),
       }),
     ],
     returns: objectResult<WorkspaceRecord>(),
-    handler: ({ sourceWorkspaceId, name, repositoryIds, branchName, referenceRepositoryIds }) =>
+    handler: ({
+      sourceWorkspaceId,
+      name,
+      repositoryIds,
+      branchName,
+      repositoryBranches,
+      referenceRepositoryIds,
+    }) =>
       manager.cloneWorkspace({
-        sourceWorkspaceId: sourceWorkspaceId as WorkspaceId,
         name,
         repositoryIds: repositoryIds as RepositoryId[],
+        ...(sourceWorkspaceId === undefined
+          ? {}
+          : { sourceWorkspaceId: sourceWorkspaceId as WorkspaceId }),
         ...(branchName === undefined ? {} : { branchName }),
+        ...(repositoryBranches === undefined
+          ? {}
+          : {
+              repositoryBranches: repositoryBranches.map(({ repositoryId, branch }) => ({
+                repositoryId: repositoryId as RepositoryId,
+                branch,
+              })),
+            }),
         ...(referenceRepositoryIds === undefined
           ? {}
           : { referenceRepositoryIds: referenceRepositoryIds as RepositoryId[] }),
@@ -370,6 +402,7 @@ export function createServerFunctions(manager: RepositoryManager) {
 
   return [
     getState,
+    getRepositoryBranches,
     createWorkspace,
     cloneWorkspace,
     addWorkspaceMember,

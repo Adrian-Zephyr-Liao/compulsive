@@ -26,6 +26,7 @@ import type {
   PromoteWorkspaceReferenceInput,
   RepositoryManager,
   RepositoryManagerOptions,
+  RepositoryBranch,
   RepositoryRecord,
   RepositoryRegistry,
   RemoveWorkspaceMemberInput,
@@ -309,6 +310,42 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
       .sort((left, right) => matchRank(left, query) - matchRank(right, query));
   }
 
+  async function getRepositoryBranches(id: RepositoryRecord["id"]): Promise<RepositoryBranch[]> {
+    await readConfig(paths.config);
+    const registry = await readRegistry(paths.registry);
+    const repository = registry.repositories.find((record) => record.id === id);
+    if (!repository) throw new CompulsiveError("NOT_FOUND", "Repository is not registered.");
+
+    const [local, remote, cachedRemote] = await Promise.all([
+      runGit(["for-each-ref", "--format=%(refname:short)", "refs/heads"], {
+        cwd: repository.absolutePath,
+      }),
+      runGit(["ls-remote", "--heads", "origin"], {
+        cwd: repository.absolutePath,
+        allowFailure: true,
+      }),
+      runGit(["for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"], {
+        cwd: repository.absolutePath,
+        allowFailure: true,
+      }),
+    ]);
+    const localNames = new Set(local.stdout.split("\n").filter(Boolean));
+    const remoteNames = new Set(
+      (remote.exitCode === 0
+        ? remote.stdout
+            .split("\n")
+            .map((line) => line.split("\trefs/heads/")[1])
+            .filter((name): name is string => Boolean(name))
+        : cachedRemote.stdout
+            .split("\n")
+            .filter((name) => name && name !== "origin/HEAD")
+            .map((name) => name.slice("origin/".length))) as string[],
+    );
+    return [...new Set([...localNames, ...remoteNames])]
+      .sort((left, right) => left.localeCompare(right))
+      .map((name) => ({ name, local: localNames.has(name), remote: remoteNames.has(name) }));
+  }
+
   async function clone(input: { remote: string; depth?: number }): Promise<RepositoryRecord> {
     const config = await readConfig(paths.config);
     const registry = await readRegistry(paths.registry);
@@ -555,6 +592,7 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
     discover,
     register,
     search,
+    getRepositoryBranches,
     planOrganize,
     organize,
     forget,

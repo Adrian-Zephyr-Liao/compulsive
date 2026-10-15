@@ -485,7 +485,7 @@ describe("workspace state", () => {
     ).toBe("origin/feature/exact-name");
   });
 
-  it("clones only selected members from the remote default branch instead of canonical HEAD", async () => {
+  it("clones selected source members and other registered repositories from remote defaults", async () => {
     async function createRemoteRepository(name: string, defaultBranch = "master") {
       const remotePath = join(sandbox, `${name}.git`);
       const repositoryPath = join(sandbox, "repositories", name);
@@ -517,16 +517,38 @@ describe("workspace state", () => {
     const selectedPath = await createRemoteRepository("selected");
     const selectedMainPath = await createRemoteRepository("selected-main", "main");
     const skippedPath = await createRemoteRepository("skipped");
+    const additionalPath = await createRemoteRepository("additional");
     await execFileAsync("git", ["-C", selectedPath, "switch", "-q", "-c", "local-only"]);
     await writeFile(join(selectedPath, "local.txt"), "canonical only\n");
     await execFileAsync("git", ["-C", selectedPath, "add", "local.txt"]);
     await execFileAsync("git", ["-C", selectedPath, "commit", "-q", "-m", "local"]);
+    await execFileAsync("git", [
+      "-C",
+      selectedPath,
+      "branch",
+      "existing-workspace",
+      "origin/master",
+    ]);
+    await execFileAsync("git", [
+      "-C",
+      selectedPath,
+      "branch",
+      "rollback-preserved",
+      "origin/master",
+    ]);
 
     const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
     await manager.initialize();
     const selectedRepository = await manager.register({ path: selectedPath });
     const selectedMainRepository = await manager.register({ path: selectedMainPath });
     const skippedRepository = await manager.register({ path: skippedPath });
+    const additionalRepository = await manager.register({ path: additionalPath });
+    await expect(manager.getRepositoryBranches(selectedRepository.id)).resolves.toEqual(
+      expect.arrayContaining([
+        { name: "existing-workspace", local: true, remote: false },
+        { name: "master", local: true, remote: true },
+      ]),
+    );
     const source = await manager.createWorkspace({ name: "source" });
     await manager.addWorkspaceMember({
       workspaceId: source.id,
@@ -541,20 +563,45 @@ describe("workspace state", () => {
       repositoryId: selectedMainRepository.id,
     });
 
+    await expect(
+      manager.cloneWorkspace({
+        sourceWorkspaceId: source.id,
+        name: "rollback-existing",
+        repositoryIds: [selectedRepository.id, additionalRepository.id],
+        repositoryBranches: [
+          { repositoryId: selectedRepository.id, branch: "rollback-preserved" },
+          { repositoryId: additionalRepository.id, branch: "master" },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(
+      execFileAsync("git", [
+        "-C",
+        selectedPath,
+        "show-ref",
+        "--verify",
+        "refs/heads/rollback-preserved",
+      ]),
+    ).resolves.toBeDefined();
+    await expect(manager.searchWorkspaces({ query: "rollback-existing" })).resolves.toEqual([]);
+
     const cloned = await manager.cloneWorkspace({
       sourceWorkspaceId: source.id,
       name: "cloned",
-      repositoryIds: [selectedRepository.id, selectedMainRepository.id],
-      branchName: "feat/custom-clone",
+      repositoryIds: [selectedRepository.id, selectedMainRepository.id, additionalRepository.id],
+      repositoryBranches: [
+        { repositoryId: selectedRepository.id, branch: "existing-workspace" },
+        { repositoryId: additionalRepository.id, branch: "feat/additional-clone" },
+      ],
       referenceRepositoryIds: [selectedMainRepository.id],
     });
 
-    expect(cloned.members).toHaveLength(2);
+    expect(cloned.members).toHaveLength(3);
     expect(cloned.members[0]).toMatchObject({
       repositoryId: selectedRepository.id,
       alias: "selected",
       mode: "worktree",
-      branch: "feat/custom-clone",
+      branch: "existing-workspace",
     });
     const clonedPath = join(cloned.absolutePath, "selected");
     await expect(readFile(join(clonedPath, "origin.txt"), "utf8")).resolves.toBe(
@@ -567,7 +614,7 @@ describe("workspace state", () => {
       execFileAsync("git", ["-C", clonedPath, "branch", "--show-current"]),
     ]);
     expect(head.stdout.trim()).toBe(remoteMaster.stdout.trim());
-    expect(developmentBranch.stdout.trim()).toBe("feat/custom-clone");
+    expect(developmentBranch.stdout.trim()).toBe("existing-workspace");
     const clonedMainPath = join(cloned.absolutePath, "selected-main");
     expect(cloned.members[1]).toMatchObject({
       repositoryId: selectedMainRepository.id,
@@ -583,6 +630,25 @@ describe("workspace state", () => {
     expect(mainHead.stdout.trim()).toBe(remoteMain.stdout.trim());
     expect(referenceBranch.stdout.trim()).toBe("");
     expect(unexpectedBranch.stdout.trim()).toBe("");
+    expect(cloned.members[2]).toMatchObject({
+      repositoryId: additionalRepository.id,
+      alias: "additional",
+      branch: "feat/additional-clone",
+    });
+    await expect(
+      readFile(join(cloned.absolutePath, "additional", "origin.txt"), "utf8"),
+    ).resolves.toBe("additional remote\n");
+
+    const created = await manager.cloneWorkspace({
+      name: "fresh",
+      repositoryIds: [skippedRepository.id],
+      branchName: "feat/fresh-workspace",
+    });
+    expect(created.members[0]).toMatchObject({
+      repositoryId: skippedRepository.id,
+      alias: "skipped",
+      branch: "feat/fresh-workspace",
+    });
 
     await writeFile(join(selectedMainPath, "reference-update.txt"), "reference update\n");
     await execFileAsync("git", ["-C", selectedMainPath, "add", "reference-update.txt"]);
@@ -867,7 +933,7 @@ describe("workspace state", () => {
         repositoryIds: [selectedRepository.id],
       }),
     ).rejects.toMatchObject({ code: "CONFLICT" });
-  }, 30_000);
+  }, 45_000);
 
   it("syncs development and reference branches while preserving merge conflicts", async () => {
     async function createRemoteRepository(name: string) {
@@ -1020,10 +1086,23 @@ describe("workspace state", () => {
     await expect(
       manager.cloneWorkspace({
         sourceWorkspaceId: source.id,
+        name: "duplicate-branches",
+        repositoryIds: [foreign.id],
+        repositoryBranches: [
+          { repositoryId: foreign.id, branch: "feat/one" },
+          { repositoryId: foreign.id, branch: "feat/two" },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(manager.searchWorkspaces({ query: "duplicate-branches" })).resolves.toEqual([]);
+
+    await expect(
+      manager.cloneWorkspace({
+        sourceWorkspaceId: source.id,
         name: "foreign",
         repositoryIds: [foreign.id],
       }),
-    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    ).rejects.toMatchObject({ code: "CONFLICT" });
     await expect(manager.searchWorkspaces({ query: "foreign" })).resolves.toEqual([]);
   });
 

@@ -119,6 +119,12 @@ export interface SearchRepositoriesInput {
   query?: string;
 }
 
+export interface RepositoryBranch {
+  name: string;
+  local: boolean;
+  remote: boolean;
+}
+
 export interface CreateWorkspaceInput {
   name: string;
   path?: string;
@@ -129,10 +135,11 @@ export interface SearchWorkspacesInput {
 }
 
 export interface CloneWorkspaceInput {
-  sourceWorkspaceId: WorkspaceId;
+  sourceWorkspaceId?: WorkspaceId;
   name: string;
   repositoryIds: RepositoryId[];
   branchName?: string;
+  repositoryBranches?: Array<{ repositoryId: RepositoryId; branch: string }>;
   referenceRepositoryIds?: RepositoryId[];
 }
 
@@ -247,6 +254,7 @@ export interface RepositoryManager {
   discover(input?: DiscoverRepositoriesInput): Promise<DiscoveryResult>;
   register(input: RegisterRepositoryInput): Promise<RepositoryRecord>;
   search(input?: SearchRepositoriesInput): Promise<RepositoryRecord[]>;
+  getRepositoryBranches(id: RepositoryId): Promise<RepositoryBranch[]>;
   planOrganize(id: RepositoryId): Promise<OrganizePlan>;
   organize(plan: OrganizePlan): Promise<RepositoryRecord>;
   forget(id: RepositoryId): Promise<void>;

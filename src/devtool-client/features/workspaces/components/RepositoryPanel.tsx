@@ -26,6 +26,7 @@ import {
 } from "antd";
 import type { TableProps } from "antd";
 
+import { useI18n } from "../../../app/i18n.js";
 import type { WorkspaceMember, WorkspaceStatusResult } from "../../../../types.js";
 
 const { Text, Title } = Typography;
@@ -92,22 +93,23 @@ export function RepositoryPanel({
   onStateChange,
   onSyncWorkspace,
 }: RepositoryPanelProps) {
+  const { formatDateTime, t } = useI18n();
   const mergedCount = status?.members.filter((item) => item.mergedIntoDefault).length ?? 0;
 
   return (
     <section className="box-border min-w-0 bg-transparent">
       <div className="mb-2 flex min-h-12 items-center justify-between gap-5 pr-2 pl-1">
         <Title className="!m-0" level={3}>
-          仓库
+          {t("repository.title")}
         </Title>
         <Space className="justify-end" size={8} wrap>
           <Button icon={<MessageOutlined />} size="large" onClick={onOpenChatgpt}>
-            在 ChatGPT 中打开
+            {t("repository.openChatgpt")}
           </Button>
           <Button icon={<CodeOutlined />} size="large" onClick={onCopyCommand}>
-            复制 cd 命令
+            {t("repository.copyCommand")}
           </Button>
-          <Tooltip title="逐个同步干净的开发分支与参考仓库，冲突会保留在对应仓库中">
+          <Tooltip title={t("repository.batchSyncTip")}>
             <Button
               disabled={busy || !members.some((member) => member.mode === "worktree")}
               icon={<BranchesOutlined />}
@@ -115,7 +117,7 @@ export function RepositoryPanel({
               size="large"
               onClick={onBatchSync}
             >
-              批量同步
+              {t("repository.batchSync")}
             </Button>
           </Tooltip>
           <Dropdown
@@ -124,7 +126,7 @@ export function RepositoryPanel({
                 {
                   key: "sync",
                   icon: <LinkOutlined />,
-                  label: "修复工作区链接",
+                  label: t("repository.repairLinks"),
                   disabled: busy,
                 },
               ],
@@ -135,11 +137,11 @@ export function RepositoryPanel({
             trigger={["click"]}
           >
             <Button icon={<MoreOutlined />} size="large">
-              更多
+              {t("common.more")}
             </Button>
           </Dropdown>
           <Button icon={<PlusOutlined />} size="large" type="primary" onClick={onAddRepository}>
-            添加仓库
+            {t("repository.add")}
           </Button>
         </Space>
       </div>
@@ -147,26 +149,37 @@ export function RepositoryPanel({
         <div className="mb-3 flex min-h-10 items-center justify-between gap-4">
           <Space size={8} wrap>
             <Segmented<string>
-              aria-label="仓库状态筛选"
+              aria-label={t("repository.statusFilter")}
               options={[
-                { value: "all", label: `全部 ${statusCounts.all}` },
-                { value: "attention", label: `需处理 ${statusCounts.attention}` },
-                { value: "unpushed", label: `待推送 ${statusCounts.unpushed}` },
-                { value: "conflicts", label: `冲突 ${statusCounts.conflicts}` },
+                { value: "all", label: t("repository.filterAll", { count: statusCounts.all }) },
+                {
+                  value: "attention",
+                  label: t("repository.filterAttention", { count: statusCounts.attention }),
+                },
+                {
+                  value: "unpushed",
+                  label: t("repository.filterUnpushed", { count: statusCounts.unpushed }),
+                },
+                {
+                  value: "conflicts",
+                  label: t("repository.filterConflicts", { count: statusCounts.conflicts }),
+                },
               ]}
               value={state}
               onChange={onStateChange}
             />
             {Boolean(mergedCount) && (
-              <Tooltip title="远端开发分支的最新提交已包含在对应主分支中">
+              <Tooltip title={t("repository.mergedTip")}>
                 <Tag className="!m-0 !px-2 !py-1" color="success" icon={<CheckCircleFilled />}>
-                  {mergedCount} 个分支已合入
+                  {t("repository.mergedCount", { count: mergedCount })}
                 </Tag>
               </Tooltip>
             )}
           </Space>
           <Text className="shrink-0" type="secondary">
-            最后检查：{status ? new Date(status.checkedAt).toLocaleString() : "尚未检查"}
+            {t("repository.lastChecked", {
+              time: status ? formatDateTime(status.checkedAt) : t("repository.notChecked"),
+            })}
           </Text>
         </div>
         <div className="mb-3 flex w-full">
@@ -176,21 +189,21 @@ export function RepositoryPanel({
             wrap
           >
             <Select
-              aria-label="仓库类型"
+              aria-label={t("repository.typeFilter")}
               size="large"
               options={[
-                { value: "all", label: "全部类型" },
-                { value: "worktree", label: "开发仓库" },
-                { value: "reference", label: "参考仓库" },
-                { value: "link", label: "目录链接" },
+                { value: "all", label: t("repository.allTypes") },
+                { value: "worktree", label: t("repository.developmentRepositories") },
+                { value: "reference", label: t("repository.referenceRepositories") },
+                { value: "link", label: t("repository.directoryLinks") },
               ]}
               value={mode}
               onChange={onModeChange}
             />
             <Input
               allowClear
-              aria-label="搜索仓库"
-              placeholder="搜索仓库名称或路径"
+              aria-label={t("repository.search")}
+              placeholder={t("repository.search")}
               prefix={<SearchOutlined />}
               size="large"
               value={query}
@@ -203,7 +216,7 @@ export function RepositoryPanel({
               size="large"
               onClick={onCheckStatus}
             >
-              检查状态
+              {t("repository.checkStatus")}
             </Button>
           </Space>
         </div>
@@ -224,7 +237,10 @@ export function RepositoryPanel({
             dataSource={filteredMembers}
             locale={{
               emptyText: (
-                <Empty description="没有匹配的仓库" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                <Empty
+                  description={t("repository.noMatches")}
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                />
               ),
             }}
             pagination={false}
@@ -235,9 +251,9 @@ export function RepositoryPanel({
           />
         ) : (
           <Flex align="center" className="min-h-[300px]" gap={12} justify="center" vertical>
-            <Empty description="还没有仓库" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            <Empty description={t("repository.empty")} image={Empty.PRESENTED_IMAGE_SIMPLE} />
             <Button icon={<PlusOutlined />} onClick={onAddRepository}>
-              添加仓库
+              {t("repository.add")}
             </Button>
           </Flex>
         )}
