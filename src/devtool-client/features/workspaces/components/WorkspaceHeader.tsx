@@ -8,18 +8,20 @@ const { Header } = Layout;
 export interface WorkspaceHeaderProps {
   connectionLabel: string;
   connectionStatus: "error" | "processing" | "success";
-  workspaceName: string | undefined;
+  contextLabel: string | undefined;
+  sectionLabel: string;
 }
 
 export function WorkspaceHeader({
   connectionLabel,
   connectionStatus,
-  workspaceName,
+  contextLabel,
+  sectionLabel,
 }: WorkspaceHeaderProps) {
   const { locale, setLocale, t } = useI18n();
   return (
     <Header className="flex !h-11 items-center justify-between border-b border-[var(--ant-color-split)] !bg-white/90 !px-5 !py-0 !leading-normal text-[var(--ant-color-text)] backdrop-blur-sm">
-      <Breadcrumb items={[{ title: t("header.requirement") }, { title: workspaceName ?? "" }]} />
+      <Breadcrumb items={[{ title: sectionLabel }, { title: contextLabel ?? "" }]} />
       <Flex align="center" gap={16}>
         <Select
           aria-label={t("language.label")}

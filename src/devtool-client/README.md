@@ -4,7 +4,7 @@ The frontend uses a small feature-first structure. Keep dependencies pointing in
 
 ```text
 src/devtool-client/
-├── app/                 providers and Ant Design theme
+├── app/                 providers, route table, and Ant Design theme
 ├── features/            business-owned state and UI
 ├── shared/ui/           business-agnostic primitives
 └── styles/              Tailwind entrypoint and scoped structural CSS
@@ -12,7 +12,7 @@ src/devtool-client/
 
 ## Responsibilities
 
-- `app/`: root providers, global theme tokens, and application bootstrap only.
+- `app/`: root providers, global theme tokens, route definitions, and application bootstrap.
 - `features/workspaces/`: workspace RPC state, actions, screens, dialogs, and feature components.
 - `shared/ui/`: reusable wrappers around Ant Design with no workspace vocabulary.
 - `styles/`: the Tailwind entrypoint and scoped structural CSS that cannot be expressed clearly with Ant Design tokens or short utility classes.
@@ -22,6 +22,7 @@ The workspace feature is split by responsibility:
 ```text
 features/workspaces/
 ├── WorkspaceApp.tsx        page orchestration and cross-feature commands
+├── RequirementPage.tsx     requirement route presentation
 ├── components/             presentational sections and the repository table
 │   └── dialogs/            modal forms and confirmations
 ├── hooks/                  RPC connection, status, drafts, and repository operations
@@ -30,6 +31,17 @@ features/workspaces/
 ```
 
 Keep RPC lifecycle and async side effects in hooks, pure status decisions in selectors, and Ant Design rendering in components. `WorkspaceApp` coordinates these pieces; it should not contain table cell markup or modal form internals.
+
+## Local routes
+
+The application uses React Router's `HashRouter` so CPL's static frontend supports direct links and reloads without server rewrite rules:
+
+- `#/requirements/:workspaceId`: a requirement and its repositories. Encode the full persistent workspace ID when building links.
+- `#/settings/storage`: storage and discovery configuration.
+- `#/settings/doctor`: on-demand environment diagnostics.
+- `#/` and `#/requirements`: redirect to the first available requirement, or show the empty state when none exists.
+
+`app/routes.tsx` owns top-level routes and URL builders. Settings owns its nested routes. The URL is the source of truth for page and requirement selection; do not add a parallel `activeView` state. The shared application shell keeps the RPC connection alive across navigation. Missing/deleted requirement IDs and unknown paths redirect with history replacement.
 
 ## Internationalization
 

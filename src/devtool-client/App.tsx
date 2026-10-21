@@ -1,4 +1,5 @@
 import { App as AntApp, ConfigProvider } from "antd";
+import { HashRouter } from "react-router";
 
 import { LanguageProvider, useI18n } from "./app/i18n.js";
 import { themeConfig } from "./app/theme.js";
@@ -9,7 +10,9 @@ function LocalizedApp() {
   return (
     <ConfigProvider locale={antdLocale} theme={themeConfig} tooltip={{ unique: true }}>
       <AntApp className="h-full">
-        <WorkspaceApp />
+        <HashRouter>
+          <WorkspaceApp />
+        </HashRouter>
       </AntApp>
     </ConfigProvider>
   );

@@ -19,6 +19,12 @@ export interface ManagerConfig {
   scanRoots: string[];
 }
 
+export interface DoctorCheck {
+  name: string;
+  ok: boolean;
+  detail: string;
+}
+
 export type WorkspaceMember =
   | {
       repositoryId: RepositoryId;
@@ -250,6 +256,7 @@ export interface RepositoryManager {
   initialize(input?: InitializeInput): Promise<ManagerConfig>;
   getConfig(): Promise<ManagerConfig>;
   updateConfig(input: UpdateConfigInput): Promise<ManagerConfig>;
+  doctor(): Promise<DoctorCheck[]>;
   clone(input: CloneRepositoryInput): Promise<RepositoryRecord>;
   discover(input?: DiscoverRepositoriesInput): Promise<DiscoveryResult>;
   register(input: RegisterRepositoryInput): Promise<RepositoryRecord>;

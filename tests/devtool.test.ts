@@ -8,6 +8,8 @@ describe("devtool rpc", () => {
     const names = createServerFunctions(createRepositoryManager()).map(({ name }) => name);
 
     expect(names).toContain("clone-workspace");
+    expect(names).toContain("update-config");
+    expect(names).toContain("run-doctor");
     expect(names).toContain("get-repository-branches");
     expect(names).toContain("open-workspace-in-chatgpt");
     expect(names).toContain("promote-workspace-reference");

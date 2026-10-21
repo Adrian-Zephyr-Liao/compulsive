@@ -12,6 +12,7 @@ import { startCodexTurn, type CodexTurn, type CodexTurnCompletion } from "./code
 import { CompulsiveError } from "./errors.js";
 import { formatCdCommand } from "./shell.js";
 import type {
+  DoctorCheck,
   RepositoryId,
   RepositoryBranch,
   RepositoryManager,
@@ -80,6 +81,31 @@ export function createServerFunctions(manager: RepositoryManager) {
         ),
       };
     },
+  });
+
+  const updateConfig = defineRpcFunction({
+    name: "update-config",
+    type: "action",
+    jsonSerializable: true,
+    args: [
+      s.object({
+        rootDir: s.string(),
+        workspaceRoot: s.string(),
+        scanRoots: s.array(s.string()),
+      }),
+    ],
+    returns: objectResult<ManagerConfig>(),
+    handler: ({ rootDir, workspaceRoot, scanRoots }): Promise<ManagerConfig> =>
+      manager.updateConfig({ rootDir, workspaceRoot, scanRoots }),
+  });
+
+  const runDoctor = defineRpcFunction({
+    name: "run-doctor",
+    type: "query",
+    jsonSerializable: true,
+    args: [],
+    returns: objectResult<{ checks: DoctorCheck[] }>(),
+    handler: async (): Promise<{ checks: DoctorCheck[] }> => ({ checks: await manager.doctor() }),
   });
 
   const createWorkspace = defineRpcFunction({
@@ -402,6 +428,8 @@ export function createServerFunctions(manager: RepositoryManager) {
 
   return [
     getState,
+    updateConfig,
+    runDoctor,
     getRepositoryBranches,
     createWorkspace,
     cloneWorkspace,

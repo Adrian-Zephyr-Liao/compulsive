@@ -10,6 +10,7 @@ export type {
   DiscoveredRepository,
   DiscoverRepositoriesInput,
   DiscoveryResult,
+  DoctorCheck,
   InitializeInput,
   ManagerConfig,
   OrganizePlan,

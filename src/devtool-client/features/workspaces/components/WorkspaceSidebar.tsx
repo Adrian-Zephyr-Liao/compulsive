@@ -1,4 +1,10 @@
-import { DatabaseOutlined, FolderOutlined, PlusOutlined, SearchOutlined } from "@ant-design/icons";
+import {
+  DatabaseOutlined,
+  FolderOutlined,
+  PlusOutlined,
+  SearchOutlined,
+  SettingOutlined,
+} from "@ant-design/icons";
 import { Button, Empty, Flex, Input, Layout, Menu, Space, Tooltip, Typography } from "antd";
 
 import { useI18n } from "../../../app/i18n.js";
@@ -12,7 +18,9 @@ export interface WorkspaceSidebarProps {
   selectedWorkspaceId: string | undefined;
   workspaceQuery: string;
   workspaceRoot: string;
+  settingsSelected: boolean;
   onOpenCreate: () => void;
+  onOpenSettings: () => void;
   onSelectWorkspace: (id: string) => void;
   onWorkspaceQueryChange: (value: string) => void;
 }
@@ -22,7 +30,9 @@ export function WorkspaceSidebar({
   selectedWorkspaceId,
   workspaceQuery,
   workspaceRoot,
+  settingsSelected,
   onOpenCreate,
+  onOpenSettings,
   onSelectWorkspace,
   onWorkspaceQueryChange,
 }: WorkspaceSidebarProps) {
@@ -93,7 +103,22 @@ export function WorkspaceSidebar({
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
         )}
-        <div className="mt-auto border-t border-[var(--ant-color-split)] px-5 pt-3 pb-4">
+        <div className="mt-auto border-t border-[var(--ant-color-split)] p-3">
+          <Button
+            block
+            className={
+              settingsSelected
+                ? "!bg-[var(--ant-color-primary-bg)] !text-[var(--ant-color-primary)]"
+                : ""
+            }
+            icon={<SettingOutlined />}
+            type="text"
+            onClick={onOpenSettings}
+          >
+            <span className="w-full text-left">{t("sidebar.systemSettings")}</span>
+          </Button>
+        </div>
+        <div className="border-t border-[var(--ant-color-split)] px-5 pt-3 pb-4">
           <Space
             align="start"
             className="w-full [&>.ant-space-item:last-child]:min-w-0 [&>.ant-space-item:last-child]:flex-1"

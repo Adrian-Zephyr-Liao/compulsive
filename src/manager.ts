@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { discoverRepositoryRoots } from "./discovery.js";
+import { runDoctorChecks } from "./doctor.js";
 import { CompulsiveError } from "./errors.js";
 import { findRepositoryRoot, readOrigin, runGit } from "./git.js";
 import { parseGitRemote } from "./git-url.js";
@@ -584,10 +585,11 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
     return updated;
   }
 
-  return {
+  const manager: RepositoryManager = {
     initialize,
     getConfig,
     updateConfig,
+    doctor: () => runDoctorChecks(manager),
     clone,
     discover,
     register,
@@ -617,4 +619,5 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
     migrateWorkspaces: (ids?: WorkspaceId[]) => migrateWorkspaces(paths, ids),
     deleteWorkspace: (id: WorkspaceId) => deleteWorkspace(paths, id),
   };
+  return manager;
 }
