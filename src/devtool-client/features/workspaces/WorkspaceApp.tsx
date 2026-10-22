@@ -1,9 +1,11 @@
 import { DatabaseOutlined, FolderOutlined, SettingOutlined } from "@ant-design/icons";
 import { Alert, App as AntApp, Empty, Flex, Layout, Spin, Typography } from "antd";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useMatch, useNavigate } from "react-router";
 
 import { useI18n } from "../../app/i18n.js";
+import { useAppearance } from "../../app/appearance.js";
+import { describeError } from "./utils/errors.js";
 import { DevtoolRoutes, routePaths } from "../../app/routes.js";
 import type { DevtoolState } from "../../../devtool.js";
 import type { WorkspaceMember } from "../../../types.js";
@@ -44,13 +46,18 @@ const initialState: DevtoolState = {
 
 const { Content, Footer } = Layout;
 const { Text } = Typography;
+const EditorPage = lazy(() => import("../editor/EditorPage.js"));
 
 export default function WorkspaceApp() {
   const { message } = AntApp.useApp();
   const { t } = useI18n();
+  const { dark, setDark, hydrate } = useAppearance();
+  const [themeBusy, setThemeBusy] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
-  const workspaceRoute = useMatch(routePaths.requirementPattern);
+  const requirementRoute = useMatch(routePaths.requirementPattern);
+  const codePreviewRoute = useMatch(routePaths.codePreviewPattern);
+  const workspaceRoute = requirementRoute ?? codePreviewRoute;
   const settingsSelected = Boolean(useMatch(routePaths.settingsPattern));
   const [state, setState] = useState(initialState);
   const selectedWorkspaceIdRef = useRef(workspaceRoute?.params.workspaceId);
@@ -66,15 +73,33 @@ export default function WorkspaceApp() {
   const [detailMember, setDetailMember] = useState<WorkspaceMember>();
   const contentRef = useRef<HTMLDivElement>(null);
 
-  const applyState = useCallback((nextState: DevtoolState, preferredWorkspaceId?: string) => {
-    const preferred = preferredWorkspaceId ?? selectedWorkspaceIdRef.current;
-    const nextSelectedId = nextState.workspaces.some((workspace) => workspace.id === preferred)
-      ? preferred
-      : nextState.workspaces[0]?.id;
-    setState(nextState);
-    selectedWorkspaceIdRef.current = nextSelectedId;
-  }, []);
+  const applyState = useCallback(
+    (nextState: DevtoolState, preferredWorkspaceId?: string) => {
+      hydrate(nextState.preferences?.dark ?? false);
+      const preferred = preferredWorkspaceId ?? selectedWorkspaceIdRef.current;
+      const nextSelectedId = nextState.workspaces.some((workspace) => workspace.id === preferred)
+        ? preferred
+        : nextState.workspaces[0]?.id;
+      setState(nextState);
+      selectedWorkspaceIdRef.current = nextSelectedId;
+    },
+    [hydrate],
+  );
   const { connectionState, fatalError, getRpc } = useWorkspaceConnection(applyState);
+  async function changeTheme(value: boolean) {
+    if (themeBusy) return;
+    setThemeBusy(true);
+    try {
+      const preferences = await (
+        await getRpc()
+      ).call("update-devtool-preferences", { dark: value });
+      setDark(preferences.dark);
+    } catch (error) {
+      void message.error(`${t("appearance.saveFailed")}: ${describeError(error)}`);
+    } finally {
+      setThemeBusy(false);
+    }
+  }
   const reportBranchError = useCallback(
     (error: string) => {
       void message.warning(error);
@@ -140,6 +165,7 @@ export default function WorkspaceApp() {
     setBusyAction,
     setFeedback,
     setRepositoryState,
+    onInspectSyncConflict: setDetailMember,
   });
   const memberDialogs = useMemberDialogs({
     busy,
@@ -241,6 +267,8 @@ export default function WorkspaceApp() {
       if (!currentWorkspace) return;
       const worktree = member.mode === "worktree" ? member : undefined;
       if (action === "detail") setDetailMember(member);
+      if (action === "preview")
+        void navigate(routePaths.codePreview(currentWorkspace.id, member.repositoryId));
       if (action === "open") void repositoryOperations.openInVscode(currentWorkspace, member);
       if (action === "rebase") void repositoryOperations.rebase(currentWorkspace, member);
       if (action === "push") repositoryOperations.push(currentWorkspace, member);
@@ -263,48 +291,61 @@ export default function WorkspaceApp() {
 
   return (
     <>
-      <Layout className="h-full min-w-[980px] bg-[var(--ant-color-bg-layout)]">
-        <WorkspaceSidebar
-          filteredWorkspaces={filteredWorkspaces}
-          selectedWorkspaceId={settingsSelected ? undefined : selectedWorkspaceId}
-          settingsSelected={settingsSelected}
-          workspaceQuery={workspaceQuery}
-          workspaceRoot={state.config?.workspaceRoot ?? ""}
-          onOpenCreate={() => {
-            void navigate(
-              selectedWorkspaceId
-                ? routePaths.requirement(selectedWorkspaceId)
-                : routePaths.requirements,
-            );
-            requirement.openCreate();
-          }}
-          onOpenSettings={() => void navigate(routePaths.settings)}
-          onSelectWorkspace={(id) => {
-            void navigate(routePaths.requirement(id));
-          }}
-          onWorkspaceQueryChange={setWorkspaceQuery}
-        />
+      <Layout
+        className={`h-full ${codePreviewRoute ? "min-w-0 overflow-hidden" : "min-w-[980px]"} bg-[var(--ant-color-bg-layout)]`}
+      >
+        {!codePreviewRoute && (
+          <WorkspaceSidebar
+            filteredWorkspaces={filteredWorkspaces}
+            selectedWorkspaceId={settingsSelected ? undefined : selectedWorkspaceId}
+            settingsSelected={settingsSelected}
+            workspaceQuery={workspaceQuery}
+            workspaceRoot={state.config?.workspaceRoot ?? ""}
+            onOpenCreate={() => {
+              void navigate(
+                selectedWorkspaceId
+                  ? routePaths.requirement(selectedWorkspaceId)
+                  : routePaths.requirements,
+              );
+              requirement.openCreate();
+            }}
+            onOpenSettings={() => void navigate(routePaths.settings)}
+            onSelectWorkspace={(id) => {
+              void navigate(routePaths.requirement(id));
+            }}
+            onWorkspaceQueryChange={setWorkspaceQuery}
+          />
+        )}
 
         <Layout className="min-h-0 min-w-0 bg-[var(--ant-color-bg-layout)]">
-          <WorkspaceHeader
-            connectionLabel={connectionLabel}
-            connectionStatus={
-              connectionState === "failed"
-                ? "error"
-                : connectionState === "connected" && !busyAction
-                  ? "success"
-                  : "processing"
-            }
-            contextLabel={settingsSelected ? t("settings.title") : currentWorkspace?.name}
-            sectionLabel={settingsSelected ? t("header.system") : t("header.requirement")}
-          />
+          {!codePreviewRoute && (
+            <WorkspaceHeader
+              dark={dark}
+              themeBusy={themeBusy || busy}
+              onThemeChange={(value) => void changeTheme(value)}
+              connectionLabel={connectionLabel}
+              connectionStatus={
+                connectionState === "failed"
+                  ? "error"
+                  : connectionState === "connected" && !busyAction
+                    ? "success"
+                    : "processing"
+              }
+              contextLabel={settingsSelected ? t("settings.title") : currentWorkspace?.name}
+              sectionLabel={settingsSelected ? t("header.system") : t("header.requirement")}
+            />
+          )}
 
           <Content
             aria-busy={busy}
             ref={contentRef}
-            className="min-w-0 overflow-auto bg-[radial-gradient(circle_at_92%_0%,rgba(91,85,231,0.05),transparent_36%),linear-gradient(135deg,#f8faff_0%,var(--ant-color-bg-layout)_58%,#faf9ff_100%)]"
+            className={
+              codePreviewRoute
+                ? "min-h-0 min-w-0 overflow-hidden"
+                : "min-w-0 overflow-auto bg-[var(--ant-color-bg-layout)]"
+            }
           >
-            {connectionState === "failed" ? (
+            {connectionState === "failed" && !codePreviewRoute ? (
               <Alert
                 description={fatalError}
                 title={t("connection.unavailable")}
@@ -325,6 +366,33 @@ export default function WorkspaceApp() {
               <DevtoolRoutes
                 defaultWorkspaceId={state.workspaces[0]?.id}
                 requirementExists={Boolean(currentWorkspace)}
+                codePreview={
+                  currentWorkspace && (
+                    <Suspense
+                      fallback={
+                        <div className="p-8">
+                          <Spin />
+                        </div>
+                      }
+                    >
+                      <EditorPage
+                        themeBusy={themeBusy || busy}
+                        onThemeChange={(value) => void changeTheme(value)}
+                        workspace={currentWorkspace}
+                        getRpc={getRpc}
+                        connected={connectionState === "connected"}
+                        onWorkspaceChanged={() => refresh(currentWorkspace.id)}
+                        onOpenVscode={(repositoryId) => {
+                          const member = currentWorkspace.members.find(
+                            (item) => item.repositoryId === repositoryId,
+                          );
+                          if (member)
+                            void repositoryOperations.openInVscode(currentWorkspace, member);
+                        }}
+                      />
+                    </Suspense>
+                  )
+                }
                 settings={
                   <SystemSettingsPage
                     getRpc={getRpc}
@@ -398,28 +466,30 @@ export default function WorkspaceApp() {
               />
             )}
           </Content>
-          <Footer className="grid min-h-10 grid-cols-[minmax(240px,1fr)_minmax(280px,1.3fr)] items-center gap-6 border-t border-[var(--ant-color-split)] !bg-white/90 !px-5 !py-2 backdrop-blur-sm">
-            <Text ellipsis type="secondary">
-              <DatabaseOutlined />{" "}
-              {t("footer.persisted", {
-                path: state.config?.workspaceRoot || t("common.notAvailable"),
-              })}
-            </Text>
-            <Text ellipsis type="secondary">
-              {settingsSelected ? (
-                <>
-                  <SettingOutlined /> {t("settings.title")}
-                </>
-              ) : (
-                <>
-                  <FolderOutlined />{" "}
-                  {t("footer.currentRequirement", {
-                    path: currentWorkspace?.absolutePath ?? t("common.notAvailable"),
-                  })}
-                </>
-              )}
-            </Text>
-          </Footer>
+          {!codePreviewRoute && (
+            <Footer className="grid min-h-10 grid-cols-[minmax(240px,1fr)_minmax(280px,1.3fr)] items-center gap-6 border-t border-[var(--ant-color-split)] !bg-[var(--ant-color-bg-container)] !px-5 !py-2">
+              <Text ellipsis type="secondary">
+                <DatabaseOutlined />{" "}
+                {t("footer.persisted", {
+                  path: state.config?.workspaceRoot || t("common.notAvailable"),
+                })}
+              </Text>
+              <Text ellipsis type="secondary">
+                {settingsSelected ? (
+                  <>
+                    <SettingOutlined /> {t("settings.title")}
+                  </>
+                ) : (
+                  <>
+                    <FolderOutlined />{" "}
+                    {t("footer.currentRequirement", {
+                      path: currentWorkspace?.absolutePath ?? t("common.notAvailable"),
+                    })}
+                  </>
+                )}
+              </Text>
+            </Footer>
+          )}
         </Layout>
       </Layout>
 

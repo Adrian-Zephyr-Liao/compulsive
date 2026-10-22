@@ -32,6 +32,7 @@ import {
 const { Text } = Typography;
 
 export type RepositoryAction =
+  | "preview"
   | "detail"
   | "open"
   | "push"
@@ -156,7 +157,7 @@ export function createRepositoryTableColumns({
                 : ""
             }`}
           >
-            <FolderOutlined className="mt-1 !text-base !text-[var(--ant-color-primary)]" />
+            <FolderOutlined className="mt-1 !text-base !text-[var(--ant-color-primary-text)]" />
             <div className="grid min-w-0 gap-0.5">
               <Text className="block min-w-0 max-w-full" ellipsis strong>
                 {member.alias}
@@ -219,7 +220,7 @@ export function createRepositoryTableColumns({
       title: t("table.actions"),
       key: "actions",
       fixed: "right",
-      width: 150,
+      width: 205,
       render: (_, member) => {
         const memberStatus = statusFor(status, member);
         const worktree = member.mode === "worktree" ? member : undefined;
@@ -264,6 +265,9 @@ export function createRepositoryTableColumns({
 
         return (
           <Space size={0}>
+            <Button disabled={busy} type="link" onClick={() => onAction("preview", member)}>
+              {t("editor.openEditor")}
+            </Button>
             <Button
               danger={Boolean(memberStatus?.conflicts.length)}
               disabled={busy}

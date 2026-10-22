@@ -1,5 +1,7 @@
 import { join, resolve, dirname } from "node:path";
 import { homedir } from "node:os";
+import { registerEditorStorage } from "./project/session.js";
+import { registerDevtoolPreferences } from "./devtool-preferences.js";
 import {
   type RepositoryRecord,
   type RepositoryManagerOptions,
@@ -349,5 +351,7 @@ export function createRepositoryManager(options: RepositoryManagerOptions = {}):
     migrateWorkspaces: (ids?: WorkspaceId[]) => migrateWorkspaces(paths, ids),
     deleteWorkspace: (id: WorkspaceId) => deleteWorkspace(paths, id),
   };
+  registerEditorStorage(manager, dataDir);
+  registerDevtoolPreferences(manager, dataDir);
   return manager;
 }

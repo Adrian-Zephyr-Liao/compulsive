@@ -90,61 +90,70 @@ describe("worktree audit and controlled removal", () => {
     await rm(sandbox, { recursive: true, force: true });
   });
 
-  it("compares registry, Git and disk, protects primary and retains file risks", async () => {
-    const referenced = await worktree("referenced");
-    const unused = await worktree("unused");
-    const external = await worktree("external", true);
-    const missing = await worktree("missing");
-    await rm(missing, { recursive: true });
-    await git("worktree", "lock", "--reason", "review", unused);
-    const disk = join(repo, ".worktrees", "unregistered");
-    await mkdir(disk);
-    await writeFile(join(unused, "file.txt"), "edited\n");
-    await writeFile(join(unused, "new.txt"), "untracked");
-    await mkdir(join(unused, "ignored"));
-    await writeFile(join(unused, "ignored", "private.txt"), "ignored");
-    const record = (await manager.search())[0]!;
-    const workspace = await manager.createWorkspace({ name: "requirement" });
-    // Legacy links must also protect a worktree that is not in current member metadata.
-    await symlink(referenced, join(workspace.absolutePath, "legacy"));
-    const registry = JSON.parse(await readFile(join(data, "workspaces.json"), "utf8"));
-    registry.workspaces[0].members = [{ repositoryId: record.id, alias: "legacy", mode: "link" }];
-    await writeFile(join(data, "workspaces.json"), JSON.stringify(registry));
-    const report = await manager.auditWorktrees();
-    expect(report.items.some((item) => item.path === repo)).toBe(false);
-    expect(report.items.find((item) => item.path === referenced)).toMatchObject({
-      category: "referenced",
-      references: ["requirement/legacy"],
+  describe("mixed registry, Git and disk inventory", () => {
+    let referenced: string;
+    let unused: string;
+    let external: string;
+    let missing: string;
+    let disk: string;
+    beforeEach(async () => {
+      referenced = await worktree("referenced");
+      unused = await worktree("unused");
+      external = await worktree("external", true);
+      missing = await worktree("missing");
+      await rm(missing, { recursive: true });
+      await git("worktree", "lock", "--reason", "review", unused);
+      disk = join(repo, ".worktrees", "unregistered");
+      await mkdir(disk);
+      await writeFile(join(unused, "file.txt"), "edited\n");
+      await writeFile(join(unused, "new.txt"), "untracked");
+      await mkdir(join(unused, "ignored"));
+      await writeFile(join(unused, "ignored", "private.txt"), "ignored");
+      const record = (await manager.search())[0]!;
+      const workspace = await manager.createWorkspace({ name: "requirement" });
+      // Legacy links must also protect a worktree that is not in current member metadata.
+      await symlink(referenced, join(workspace.absolutePath, "legacy"));
+      const registry = JSON.parse(await readFile(join(data, "workspaces.json"), "utf8"));
+      registry.workspaces[0].members = [{ repositoryId: record.id, alias: "legacy", mode: "link" }];
+      await writeFile(join(data, "workspaces.json"), JSON.stringify(registry));
+    }, 20000);
+    it("compares registry, Git and disk, protects primary and retains file risks", async () => {
+      const report = await manager.auditWorktrees();
+      expect(report.items.some((item) => item.path === repo)).toBe(false);
+      expect(report.items.find((item) => item.path === referenced)).toMatchObject({
+        category: "referenced",
+        references: ["requirement/legacy"],
+      });
+      expect(report.items.find((item) => item.path === external)?.category).toBe("external");
+      expect(report.items.find((item) => item.path === missing)).toMatchObject({
+        category: "missing",
+        exists: false,
+      });
+      expect(report.items.find((item) => item.path === disk)).toMatchObject({
+        category: "unregistered",
+        risks: ["unknown"],
+      });
+      const candidate = report.items.find((item) => item.path === unused)!;
+      expect(candidate.category).toBe("unreferenced");
+      expect(candidate.risks).toEqual(
+        expect.arrayContaining([
+          "dirty",
+          "untracked",
+          "ignored-files",
+          "locked",
+          "no-upstream",
+          "unpublished",
+        ]),
+      );
+      expect(candidate.locked).toBe("review");
+      expect(candidate.changes).toContainEqual({ status: "!!", path: "ignored/" });
+      expect(await git("worktree", "list", "--porcelain")).toContain("locked review");
+      expect(await readFile(join(unused, "file.txt"), "utf8")).toBe("edited\n");
+      await expect(validateAuditPath(candidate, await manager.search())).resolves.toBe(unused);
+      await expect(
+        validateAuditPath({ ...candidate, path: repo }, await manager.search()),
+      ).rejects.toThrow();
     });
-    expect(report.items.find((item) => item.path === external)?.category).toBe("external");
-    expect(report.items.find((item) => item.path === missing)).toMatchObject({
-      category: "missing",
-      exists: false,
-    });
-    expect(report.items.find((item) => item.path === disk)).toMatchObject({
-      category: "unregistered",
-      risks: ["unknown"],
-    });
-    const candidate = report.items.find((item) => item.path === unused)!;
-    expect(candidate.category).toBe("unreferenced");
-    expect(candidate.risks).toEqual(
-      expect.arrayContaining([
-        "dirty",
-        "untracked",
-        "ignored-files",
-        "locked",
-        "no-upstream",
-        "unpublished",
-      ]),
-    );
-    expect(candidate.locked).toBe("review");
-    expect(candidate.changes).toContainEqual({ status: "!!", path: "ignored/" });
-    expect(await git("worktree", "list", "--porcelain")).toContain("locked review");
-    expect(await readFile(join(unused, "file.txt"), "utf8")).toBe("edited\n");
-    await expect(validateAuditPath(candidate, await manager.search())).resolves.toBe(unused);
-    await expect(
-      validateAuditPath({ ...candidate, path: repo }, await manager.search()),
-    ).rejects.toThrow();
   });
 
   it("persists reports and ignores, then resurfaces changes at the same path", async () => {
@@ -217,31 +226,47 @@ describe("worktree audit and controlled removal", () => {
     expect(report.errors).toHaveLength(1);
   });
 
-  it("warns when detached commits have no local branch or tag and never fetches remote refs", async () => {
-    await git("remote", "add", "origin", join(sandbox, "nonexistent-remote.git"));
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
-    await git("branch", "--set-upstream-to=origin/main", "main");
-    const path = join(repo, ".worktrees", "detached");
-    await git("worktree", "add", "-q", "--detach", path);
-    await execute("git", [
-      "-C",
-      path,
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.com",
-      "commit",
-      "--allow-empty",
-      "-qm",
-      "detached commit",
-    ]);
-    const item = (await manager.auditWorktrees()).items[0]!;
-    expect(item.error).toBeNull();
-    expect(item.upstream).toBeNull();
-    expect(item.unpublished).toBe(1);
-    expect(item.risks).toContain("detached-unprotected");
-    await execute("git", ["-C", path, "tag", "keep-detached"]);
-    expect((await manager.auditWorktrees()).items[0]?.risks).not.toContain("detached-unprotected");
+  describe("detached commit protection", () => {
+    let path: string;
+    beforeEach(async () => {
+      await git("remote", "add", "origin", join(sandbox, "nonexistent-remote.git"));
+      await git("update-ref", "refs/remotes/origin/main", "HEAD");
+      await git("branch", "--set-upstream-to=origin/main", "main");
+      path = join(repo, ".worktrees", "detached");
+      await git("worktree", "add", "-q", "--detach", path);
+      await execute("git", [
+        "-C",
+        path,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "detached commit",
+      ]);
+    }, 20000);
+
+    it("warns when detached commits have no local branch or tag and never fetches remote refs", async () => {
+      const item = (await manager.auditWorktrees()).items[0]!;
+      expect(item.error).toBeNull();
+      expect(item.upstream).toBeNull();
+      expect(item.unpublished).toBe(1);
+      expect(item.risks).toContain("detached-unprotected");
+    });
+
+    describe("with a local tag", () => {
+      beforeEach(async () => {
+        await execute("git", ["-C", path, "tag", "keep-detached"]);
+      }, 20000);
+
+      it("does not warn for protected detached commits or fetch remote refs", async () => {
+        const item = (await manager.auditWorktrees()).items[0]!;
+        expect(item.error).toBeNull();
+        expect(item.risks).not.toContain("detached-unprotected");
+      });
+    });
   });
 
   it("stops a running job and returns an incomplete persisted report", async () => {

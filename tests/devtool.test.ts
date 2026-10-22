@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServerFunctions } from "../src/devtool.js";
 import { createRepositoryManager } from "../src/manager.js";
 import * as codex from "../src/codex.js";
+import * as preferences from "../src/devtool-preferences.js";
 import type { ManagerConfig, WorkspaceRecord, WorkspaceStatusResult } from "../src/types.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -25,11 +26,12 @@ const workspace: WorkspaceRecord = {
 describe("devtool rpc", () => {
   it("exposes workspace actions", () => {
     const names = createServerFunctions(createRepositoryManager()).map(({ name }) => name);
-    expect(names).toHaveLength(29);
+    expect(names).toHaveLength(58);
     expect(new Set(names).size).toBe(names.length);
 
     expect(names).toContain("clone-workspace");
     expect(names).toContain("update-config");
+    expect(names).toContain("update-devtool-preferences");
     expect(names).toContain("run-doctor");
     expect(names).toEqual(
       expect.arrayContaining([
@@ -44,6 +46,8 @@ describe("devtool rpc", () => {
       ]),
     );
     expect(names).toContain("get-repository-branches");
+    expect(names).toContain("list-project-directory");
+    expect(names).toContain("read-project-file");
     expect(names).toContain("open-workspace-in-chatgpt");
     expect(names).toContain("promote-workspace-reference");
     expect(names).toContain("switch-workspace-member-branch");
@@ -58,6 +62,7 @@ describe("devtool rpc", () => {
   });
 
   it("assembles state and omits status snapshots for deleted workspaces", async () => {
+    vi.spyOn(preferences, "devtoolPreferences").mockResolvedValue({ dark: true });
     const manager = createRepositoryManager();
     const retained: WorkspaceStatusResult = {
       workspaceId: workspace.id,
@@ -74,6 +79,7 @@ describe("devtool rpc", () => {
     });
     const action = createServerFunctions(manager).find((fn) => fn.name === "get-state")!;
     expect(await action.handler!()).toEqual({
+      preferences: { dark: true },
       config,
       repositories: [],
       workspaces: [{ ...workspace, cdCommand: "cd -- '/example/Workspaces/Task'" }],

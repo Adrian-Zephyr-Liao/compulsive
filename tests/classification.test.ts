@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import { parseGitRemote } from "../src/git-url.js";
+import { pathIsInside } from "../src/repository-metadata.js";
+
+it("distinguishes parent traversal from legitimate names beginning with two dots", () => {
+  expect(pathIsInside("/repos", "/repos/..project")).toBe(true);
+  expect(pathIsInside("/repos", "/repos")).toBe(true);
+  expect(pathIsInside("/repos", "/repos/src")).toBe(true);
+  expect(pathIsInside("/repos", "/repos-other")).toBe(false);
+  expect(pathIsInside("/repos/child", "/repos")).toBe(false);
+});
 
 describe("parseGitRemote", () => {
   it.each([

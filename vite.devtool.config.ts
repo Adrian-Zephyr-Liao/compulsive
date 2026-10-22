@@ -18,7 +18,7 @@ export default defineConfig({
           groups: [
             {
               name: "react-vendor",
-              test: /node_modules[\\/](?:react|react-dom|scheduler)/,
+              test: /node_modules[\\/](?:react|react-dom|scheduler)(?:[\\/]|$)/,
               priority: 30,
             },
             {
@@ -35,11 +35,6 @@ export default defineConfig({
               name: "antd-runtime",
               test: /node_modules[\\/](?:@rc-component|rc-)/,
               priority: 12,
-            },
-            {
-              name: "vendor",
-              test: /node_modules/,
-              priority: 10,
             },
           ],
         },

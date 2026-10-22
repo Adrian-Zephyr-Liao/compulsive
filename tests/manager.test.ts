@@ -204,6 +204,36 @@ describe("RepositoryManager state", () => {
     expect(result.repositories).toHaveLength(1);
     expect(result.repositories[0]?.absolutePath).toBe(await realpath(worktreePath));
   });
+  it("rejects a stale organize plan after a linked worktree is created", async () => {
+    const source = join(sandbox, "external", "with-worktree");
+    await execFileAsync("git", ["init", "-q", source]);
+    await writeFile(join(source, "README.md"), "keep both checkouts\n");
+    await execFileAsync("git", ["-C", source, "add", "README.md"]);
+    await execFileAsync("git", ["-C", source, "commit", "-qm", "initial"]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const repository = await manager.register({ path: source });
+    const plan = await manager.planOrganize(repository.id);
+    const linked = join(sandbox, "linked");
+    await execFileAsync("git", ["-C", source, "worktree", "add", "-qb", "feat/linked", linked]);
+    await expect(manager.planOrganize(repository.id)).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(manager.organize(plan)).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await readFile(join(source, "README.md"), "utf8")).toBe("keep both checkouts\n");
+    expect(await readFile(join(linked, "README.md"), "utf8")).toBe("keep both checkouts\n");
+    expect((await execFileAsync("git", ["-C", linked, "status", "--porcelain"])).stdout).toBe("");
+    await expect(access(plan.target)).rejects.toThrow();
+  });
+  it("does not move a checkout with an external Git directory", async () => {
+    const source = join(sandbox, "separate-checkout");
+    const gitDirectory = join(sandbox, "separate-git");
+    await execFileAsync("git", ["init", "-q", "--separate-git-dir", gitDirectory, source]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const repository = await manager.register({ path: source });
+    await expect(manager.planOrganize(repository.id)).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(access(join(gitDirectory, "HEAD"))).resolves.toBeUndefined();
+    expect((await manager.search())[0]?.absolutePath).toBe(await realpath(source));
+  });
 
   it("forgets only the index record and leaves repository files untouched", async () => {
     const repositoryPath = join(sandbox, "keep-me");

@@ -60,6 +60,46 @@ cpl doctor
 Run `cpl` without a command in an interactive terminal to open a searchable repository and
 Workspace picker.
 
+### Local editor
+
+Choose **Open editor** in a requirement's repository row to enter a local workbench inspired by
+[Mayoi](https://github.com/sorrycc/Mayoi). It uses React, Ant Design, CodeMirror 6 and xterm.js;
+it does not copy Mayoi's native runtime or connect SSH/cloud accounts.
+
+- Edit and save files, create/rename folders and files, and move items to the OS Trash.
+- Start in **Changes / Diff** to review saved local staged, unstaged and new files. Switch to
+  **All files** when you need the full editor; unsaved buffers stay intact. This is not a comparison
+  of the whole branch against the remote main branch.
+- Open files with `Cmd/Ctrl+P`, commands with `Cmd/Ctrl+Shift+P`, save with `Cmd/Ctrl+S`,
+  split with `Cmd/Ctrl+\\`, and search inside a file with `Cmd/Ctrl+F`.
+- Use folder search with replacement previews, independent editor columns, Markdown/SVG/image
+  previews, and on-demand Git status, staging, diffs, commit history and branch operations.
+- **Discard all changes** clears staged, unstaged and untracked changes; ignored files and commits
+  remain. **No backup is selected by default**, with a second permanent-loss confirmation. Select
+  **Keep a Git stash backup** for a recovery command instead. Save buffers and pause external writes
+  first. Conflicts, unfinished Git operations and unsafe/excluded files block either mode.
+- **Generate with Codex** sends only the staged patch after confirmation and fills in the commit
+  message for review. It uses the installed, signed-in CLI's default model without custom configuration
+  or project context, and never stages, commits or pushes automatically.
+- Start real local terminals explicitly. **A terminal is not a sandbox**: it runs with your system
+  user's permissions. Shells start in the selected member, but can access other machine paths.
+- Switch the **global dark/light mode** from the page header or editor preferences. Requirements,
+  settings, editor and overlays share one theme, saved in `devtool-preferences.json` beside CPL config.
+  Font, wrapping, Vim, opt-in auto save and layout remain in `editor-sessions.json`; source text and terminal output are not persisted.
+
+Saves check the loaded file version and reject external changes instead of overwriting them.
+Unsaved tabs require a choice before closing/leaving. Filesystem events refresh clean documents;
+Git is checked on demand, not polled. Terminal sessions are bounded and end on close/server shutdown;
+unattached sessions expire after 20 minutes. File content stays local except when you explicitly
+confirm sending a staged patch to Codex for a commit message.
+
+Filesystem queries are limited to current requirement members, exclude symlinks, Git metadata,
+dependency/worktree directories and common environment/key files, and accept UTF-8 text/images
+up to 4 MiB. A directory read examines at most 1,000 entries and reports truncation. These exclusions
+are not a general secret detector. Use **Open in VS Code** for unsupported files and larger projects.
+Recoverable deletion uses macOS's system `trash` command (macOS 15+); when unavailable, deletion is
+blocked and the file manager remains the safe alternative.
+
 ### Worktree audit
 
 Use **System settings → Environment diagnostics → Worktree audit**, or run:
@@ -129,8 +169,8 @@ Use it to:
 - Refresh reference checkouts from the remote default branch without creating local branches.
 - Inspect uncommitted files, conflicts, ahead/behind counts, unpushed commits, and whether a remote
   development branch has been merged into the default branch.
-- Batch-sync clean development branches, with per-repository failures and conflicts reported by
-  name.
+- Batch-sync development branches with automatic stash, rebase and push; report skipped repositories,
+  failures, conflicts and required safe force pushes by name.
 - Open a member in VS Code, open the Workspace in ChatGPT, or hand a conflict to a dedicated Codex
   chat with full filesystem access.
 
@@ -140,12 +180,26 @@ is needed.
 
 ### Rebase and push safety
 
+Batch sync temporarily stashes staged, unstaged and untracked changes, including binary files. It
+fetches the remote default branch (`origin/master` or `origin/main`), rebases onto the same-name remote
+branch when needed to retain others' commits, then rebases onto the default branch and pushes. It
+restores local changes with their staging state afterward; those changes are not committed or pushed.
+Reference checkouts update while remaining detached. Existing unfinished Git operations block sync.
+Rebase conflicts stop that repository before push; use **Handle conflicts** to open VS Code or
+explicitly start Codex. The result includes the exact retained stash backup and its recovery state.
+Inspect the working tree before recovering a pending backup; do not reapply a partially restored stash.
+Backups remain in Git stash even after a successful restore; CPL does not drop existing or new stashes.
+
 Normal branch divergence is synchronized with the exact same-name remote branch before a regular
 push. When rebasing onto the remote default branch rewrites commits that were already pushed, the
 DevTool records the pre-rebase remote commit, shows a red **Safe force push required** status, and
 blocks a regular push. After confirmation it uses an explicit `--force-with-lease` bound to that
 recorded commit. If the remote branch changed again, Git rejects the push instead of overwriting the
-new work.
+new work. Repeating a rebase or selecting the current branch does not refresh or clear this lease.
+Batch sync never force-pushes automatically. Explicit safe force push temporarily stashes and restores
+local changes too, so restoring work-in-progress does not block completing a reviewed push.
+If the same-name remote branch contains commits absent from both the checkout and rebase destination,
+synchronize that branch before rebasing; CPL will not authorize overwriting those unseen commits.
 
 ## Directory model
 
@@ -290,6 +344,8 @@ throw `CompulsiveError`, whose `code` is stable and machine-readable.
 - Credentials are removed before remote information reaches the index.
 - Scanning does not descend into repositories, heavy build outputs, or symbolic links.
 - Organization refuses occupied, nested, stale, and cross-volume targets.
+- Moving linked worktrees, repositories with linked worktrees, or external Git directories is blocked;
+  resolve their Git layout before organizing. Already correctly located repositories remain no-ops.
 - A moved repository is revalidated before its index path changes.
 - Workspace links follow organized repositories and refuse to overwrite user content.
 - Rewritten remote branch history requires an explicit, SHA-bound `--force-with-lease` confirmation.

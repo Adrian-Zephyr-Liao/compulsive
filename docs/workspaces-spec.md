@@ -190,6 +190,42 @@ For worktrees declaring submodules, migration renames the verified worktree and 
 Overlapping legacy worktree paths are rejected during preflight because replacing a nested Git
 submodule checkout with a symbolic link can invalidate the parent worktree.
 
+## Batch branch synchronization
+
+`RepositoryManager.syncWorkspaceBranches` and its DevTool RPC operate on the verified physical
+worktree of each member, not the canonical checkout. Legacy directory links are skipped. Managed
+members are processed independently so one failure does not suppress another member's result.
+
+1. Verify membership, repository identity, branch and managed link. Reject conflicts and unfinished
+   merge/rebase/cherry-pick/revert operations before changing files.
+2. Save staged, unstaged and untracked changes with `stash push --include-untracked`. Locate the
+   backup by its unique message and immutable object ID; never assume it is `stash@{0}`.
+3. Fetch the remote default branch and the exact same-name development branch. A detached reference
+   checkout updates to the default branch. Development checkouts first rebase the same-name remote
+   branch to retain remote work, then rebase the default branch. A branch already awaiting a reviewed
+   force push keeps its original remote lease and does not replay old published history.
+   Reject incoming paths that would overwrite ignored local files; ignored dependencies are not
+   collected into the stash. Detached checkout updates also disable overwriting ignored paths.
+4. Push only committed history with an ordinary push when fast-forward is possible. Otherwise return
+   `push-required`, retain the original `forcePushBase`, and require explicit safe-force confirmation.
+   Do not automatically force push. A completed development branch may still be skipped.
+5. Restore saved work with `stash apply --index <oid>` after a safe completion or failure. Never
+   restore over an unfinished Git operation or edits made while sync was running. Rebase conflicts
+   retain their current Git state and stash backup, and do not push. A failed restore may be partial;
+   inspect it before recovery rather than blindly reapplying the stash.
+
+Successful restore leaves the backup in Git stash; no stash entry is dropped. Explicit safe force
+push uses the same temporary-save/restore flow when local changes were restored by batch sync.
+Ordinary individual push/rebase keeps its existing clean-worktree requirement. Per-worktree locks
+cover sync/rebase/push calls in the current process only; external tools and other CPL processes are
+not locked. Pause external edits during synchronization.
+
+`WorkspaceBranchSyncItem` reports `synced`, `skipped`, `conflict`, `failed` or `push-required`, a
+human-readable reason, an optional operation `phase`, and optional `backup: { oid, restored }`.
+These are operation results, not a new on-disk journal. The DevTool refreshes membership and status,
+lists non-success outcomes by alias, and keeps actionable results visible. Conflict handling uses
+the existing VS Code / explicitly requested Codex paths; batch sync does not start an AI task itself.
+
 ## Remove and Delete Safety
 
 Removing a `link` member:
@@ -211,10 +247,13 @@ Deleting a workspace:
 - Preflight every member before changing anything.
 - Refuse deletion when any worktree is dirty or any member path is unexpected.
 - Remove managed members, then remove the workspace record atomically.
-- Reject the filesystem root, home, configured repository/Workspace roots, and a directory containing
-  another registered Workspace before changing members.
+- Reject the filesystem root, home, configured repository/Workspace roots and their ancestors, and a
+  directory containing any registered canonical repository or another registered Workspace before changing members.
+- Resolve configured root aliases to their physical paths before checking protection; a symbolic-link
+  setting does not permit deleting the underlying storage directory.
 - Rename the registered directory to a sibling deletion path before committing the registry change;
-  roll back the directory and removed members if that transaction fails.
+  roll back the directory before restoring removed members if that transaction fails. Detached
+  checkouts are restored at their captured commit, not a possibly advanced remote ref.
 - Recursively remove the deletion directory, including non-member files. A failure after unregistering
   reports the retained deletion path; it does not claim full removal.
 - Never delete a canonical repository, branch, commit, or remote.
@@ -282,6 +321,7 @@ src/workspace-registry.ts Workspace creation/search, lookup and status persisten
 src/workspace-members.ts Member lifecycle and branch/reference conversion
 src/workspace-clone.ts    Selected-repository Workspace clone orchestration
 src/workspace-sync.ts     Rebase, push and batch branch synchronization
+src/workspace-sync-stash.ts Sync locks, stash recovery and ignored-path collision protection
 src/workspace-maintenance.ts Link repair and legacy migration
 src/workspace-deletion.ts Workspace deletion preflight and transaction
 src/workspace-paths.ts    Shared link/path checks and rollback execution

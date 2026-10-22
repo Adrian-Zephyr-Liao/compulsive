@@ -200,9 +200,11 @@ export async function removeWorkspaceMember(
   const memberPath = join(workspace.absolutePath, member.alias);
   let linkTarget: string | undefined;
   let worktreeState: { memberPath: string; worktreePath: string; linked: boolean } | undefined;
+  let originalHead: string | undefined;
   if (member.mode === "worktree") {
     worktreeState = await verifyWorkspaceWorktree(workspace, member, repository.absolutePath);
     await assertCleanWorktree(worktreeState.worktreePath);
+    originalHead = (await runGit(["rev-parse", "HEAD"], { cwd: member.worktreePath })).stdout;
     if (worktreeState.linked) {
       await unlinkExpectedLink(worktreeState.memberPath, worktreeState.worktreePath);
     }
@@ -234,7 +236,7 @@ export async function removeWorkspaceMember(
           member.worktreePath,
           member.branch,
           false,
-          member.branch,
+          originalHead,
           member.detached,
         );
         if (worktreeState?.linked) {
@@ -279,6 +281,7 @@ export async function promoteWorkspaceReference(
   const repository = findRepository(repositoryRegistry.repositories, member.repositoryId);
   await verifyWorkspaceWorktree(workspace, member, repository.absolutePath);
   if (!member.detached) await assertCleanWorktree(member.worktreePath);
+  if (!member.detached && member.branch === branch) return workspace;
   const validBranch = await runGit(["check-ref-format", "--branch", branch], {
     cwd: repository.absolutePath,
     allowFailure: true,

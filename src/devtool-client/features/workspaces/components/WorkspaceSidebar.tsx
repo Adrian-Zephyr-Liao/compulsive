@@ -39,7 +39,7 @@ export function WorkspaceSidebar({
   const { t } = useI18n();
   return (
     <Sider
-      className="relative z-[2] overflow-hidden border-r border-[var(--ant-color-split)] !bg-linear-to-b from-white/70 to-[#f8f9fd]"
+      className="relative z-[2] overflow-hidden border-r border-[var(--ant-color-split)] !bg-[var(--ant-color-bg-layout)]"
       theme="light"
       width={256}
     >
@@ -108,7 +108,7 @@ export function WorkspaceSidebar({
             block
             className={
               settingsSelected
-                ? "!bg-[var(--ant-color-primary-bg)] !text-[var(--ant-color-primary)]"
+                ? "!bg-[var(--ant-color-primary-bg)] !text-[var(--ant-color-primary-text)]"
                 : ""
             }
             icon={<SettingOutlined />}

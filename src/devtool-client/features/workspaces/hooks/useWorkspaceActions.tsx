@@ -1,8 +1,14 @@
 import { App as AntApp, Typography } from "antd";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import type { DevtoolWorkspace } from "../../../../devtool.js";
-import type { DoctorCheck, ManagerConfig, WorkspaceStatusResult } from "../../../../types.js";
+import type {
+  DoctorCheck,
+  ManagerConfig,
+  WorkspaceMember,
+  WorkspaceStatusResult,
+} from "../../../../types.js";
 import { useI18n } from "../../../app/i18n.js";
+import { BatchSyncFeedback } from "../components/BatchSyncFeedback.js";
 import type { WorkspaceFeedbackState, WorkspaceRpc } from "../types.js";
 import { describeError } from "../utils/errors.js";
 import type { useRequirementDraft } from "./useRequirementDraft.js";
@@ -18,6 +24,7 @@ interface WorkspaceActionsOptions {
   setBusyAction: Dispatch<SetStateAction<string>>;
   setFeedback: Dispatch<SetStateAction<WorkspaceFeedbackState | undefined>>;
   setRepositoryState: (state: string) => void;
+  onInspectSyncConflict: (member: WorkspaceMember) => void;
 }
 export function useWorkspaceActions({
   busy,
@@ -29,6 +36,7 @@ export function useWorkspaceActions({
   setBusyAction,
   setFeedback,
   setRepositoryState,
+  onInspectSyncConflict,
 }: WorkspaceActionsOptions) {
   const { message, modal, notification } = AntApp.useApp();
   const { t } = useI18n();
@@ -123,50 +131,54 @@ export function useWorkspaceActions({
 
   async function syncWorkspaceBranches(workspace: DevtoolWorkspace): Promise<void> {
     if (busy) return;
-    const rpc = await getRpc();
     setBusyAction(t("feedback.batchSync"));
     try {
+      const rpc = await getRpc();
       const result = await rpc.call("sync-workspace-branches", { workspaceId: workspace.id });
-      await refreshWorkspaceStatus(true);
+      let refreshError: string | undefined;
+      try {
+        await refresh(selectedWorkspaceIdRef.current === workspace.id ? workspace.id : undefined);
+        if (selectedWorkspaceIdRef.current === workspace.id) await refreshWorkspaceStatus(true);
+      } catch (error) {
+        refreshError = describeError(error);
+      }
       const count = (outcome: (typeof result.items)[number]["outcome"]) =>
         result.items.filter((item) => item.outcome === outcome).length;
-      const synced = count("synced");
       const skipped = count("skipped");
       const conflicts = count("conflict");
       const failed = count("failed");
-      const issues = result.items.filter(
-        (item) => item.outcome === "failed" || item.outcome === "conflict",
-      );
-      if (conflicts) setRepositoryState("conflicts");
+      const pushRequired = count("push-required");
+      const incomplete = skipped || conflicts || failed || pushRequired || Boolean(refreshError);
+      if (conflicts && selectedWorkspaceIdRef.current === workspace.id)
+        setRepositoryState("conflicts");
       setFeedback(undefined);
       const options = {
         title: failed
           ? t("feedback.repositoriesFailed", { count: failed })
           : conflicts
             ? t("feedback.repositoriesConflicted", { count: conflicts })
-            : t("feedback.batchComplete"),
+            : incomplete
+              ? t("feedback.batchIncomplete")
+              : t("feedback.batchComplete"),
         description: (
-          <div className="grid gap-2">
-            <Text type="secondary">
-              {t("feedback.batchSummary", { synced, skipped, conflicts, failed })}
-            </Text>
-            {issues.length > 0 && (
-              <ul className="m-0 grid max-h-52 gap-1 overflow-auto pl-5">
-                {issues.map((item) => (
-                  <li key={item.repositoryId}>
-                    <Text strong>{item.alias}</Text>
-                    <Text type="secondary">: {item.message}</Text>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+          <BatchSyncFeedback
+            items={result.items}
+            refreshError={refreshError}
+            onInspectConflict={(repositoryId) => {
+              if (selectedWorkspaceIdRef.current !== workspace.id) {
+                void message.warning(t("feedback.batchSelectionChanged", { name: workspace.name }));
+                return;
+              }
+              const member = workspace.members.find((item) => item.repositoryId === repositoryId);
+              if (member) onInspectSyncConflict(member);
+            }}
+          />
         ),
-        duration: issues.length ? 0 : 8,
+        duration: incomplete ? 0 : 8,
         placement: "topRight" as const,
       };
       if (failed) notification.error(options);
-      else if (conflicts) notification.warning(options);
+      else if (incomplete) notification.warning(options);
       else notification.success(options);
     } catch (error) {
       notification.error({
@@ -188,8 +200,10 @@ export function useWorkspaceActions({
         <div className="grid gap-2 text-sm">
           <Text>{t("feedback.batchIntro")}</Text>
           <ul className="m-0 grid gap-1 pl-5 text-[var(--ant-color-text-secondary)]">
+            <li>{t("feedback.batchRuleStash")}</li>
             <li>{t("feedback.batchRuleDevelopment")}</li>
             <li>{t("feedback.batchRuleReference")}</li>
+            <li>{t("feedback.batchRuleRestore")}</li>
             <li>{t("feedback.batchRuleSkip")}</li>
           </ul>
         </div>

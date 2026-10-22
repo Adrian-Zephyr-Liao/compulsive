@@ -7,7 +7,9 @@ import type {
 } from "../src/types.js";
 import {
   countWorkspaceStatuses,
+  canPush,
   filterWorkspaceMembers,
+  isTaskComplete,
 } from "../src/devtool-client/features/workspaces/utils/workspaceSelectors.js";
 
 const repository: RepositoryRecord = {
@@ -125,5 +127,55 @@ describe("workspace view selectors", () => {
         state: "attention",
       }),
     ).toEqual([]);
+  });
+
+  it("allows confirmed safe force push with restored WIP but retains ordinary push and conflict guards", () => {
+    const forceStatus = {
+      ...status.members[0]!,
+      conflicts: [],
+      unpushed: 0,
+      forcePushRequired: true,
+    };
+    expect(canPush(development, forceStatus, true)).toBe(true);
+    expect(canPush(development, forceStatus, false)).toBe(false);
+    expect(canPush(development, { ...forceStatus, conflicts: ["file"] }, true)).toBe(false);
+    expect(canPush(reference, forceStatus, true)).toBe(false);
+    expect(canPush({ ...development, mode: "link" }, forceStatus, true)).toBe(false);
+    expect(canPush(development, undefined, true)).toBe(false);
+    expect(
+      canPush(development, { ...forceStatus, forcePushRequired: false, unpushed: 2 }, true),
+    ).toBe(false);
+    expect(
+      canPush(
+        development,
+        { ...forceStatus, forcePushRequired: false, unpushed: 2, changes: [] },
+        true,
+      ),
+    ).toBe(true);
+    expect(isTaskComplete({ ...forceStatus, changes: [], mergedIntoDefault: true })).toBe(false);
+  });
+
+  it("counts a force-push requirement as pending even without ordinary unpushed commits", () => {
+    const forceStatus: WorkspaceStatusResult = {
+      ...status,
+      members: [
+        { ...status.members[0]!, conflicts: [], changes: [], unpushed: 0, forcePushRequired: true },
+      ],
+    };
+    expect(countWorkspaceStatuses(members, forceStatus)).toEqual({
+      all: 2,
+      attention: 1,
+      unpushed: 1,
+      conflicts: 0,
+    });
+    for (const state of ["attention", "unpushed"]) {
+      expect(
+        filterWorkspaceMembers(members, [repository], forceStatus, {
+          query: "",
+          mode: "all",
+          state,
+        }),
+      ).toEqual([development]);
+    }
   });
 });

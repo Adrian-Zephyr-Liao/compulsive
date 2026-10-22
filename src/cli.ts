@@ -187,8 +187,12 @@ async function dispatch(parsed: ParsedArguments, context: CliContext): Promise<v
         }
       }
       await context.manager.forget(record.id);
-      context.stdout(
-        context.theme.success(`Forgot ${record.name}`, "Repository files were not deleted."),
+      printValue(
+        context,
+        json
+          ? { forgotten: record.id }
+          : context.theme.success(`Forgot ${record.name}`, "Repository files were not deleted."),
+        json,
       );
       return;
     }

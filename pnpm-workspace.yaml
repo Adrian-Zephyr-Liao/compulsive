@@ -1,4 +1,7 @@
 packages: []
 
+allowBuilds:
+  node-pty: true
+
 overrides:
   "@jridgewell/sourcemap-codec": 1.6.0

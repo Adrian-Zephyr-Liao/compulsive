@@ -4,6 +4,7 @@ import { type DevtoolState } from "./types.js";
 import { formatCdCommand } from "../shell.js";
 import { s } from "devframe/utils/simple-schema";
 import { type ManagerConfig, type DoctorCheck, type RepositoryManager } from "../types.js";
+import { devtoolPreferences, type DevtoolPreferences } from "../devtool-preferences.js";
 
 export function createStateFunctions(manager: RepositoryManager) {
   const getState = defineRpcFunction({
@@ -13,14 +14,16 @@ export function createStateFunctions(manager: RepositoryManager) {
     args: [],
     returns: objectResult<DevtoolState>(),
     handler: async (): Promise<DevtoolState> => {
-      const [config, repositories, workspaces, workspaceStatuses] = await Promise.all([
+      const [config, repositories, workspaces, workspaceStatuses, preferences] = await Promise.all([
         manager.getConfig(),
         manager.search(),
         manager.searchWorkspaces(),
         manager.getWorkspaceStatuses(),
+        devtoolPreferences(manager),
       ]);
       const workspaceIds = new Set(workspaces.map(({ id }) => id));
       return {
+        preferences,
         config,
         repositories,
         workspaces: workspaces.map((workspace) => ({
@@ -58,5 +61,13 @@ export function createStateFunctions(manager: RepositoryManager) {
     returns: objectResult<{ checks: DoctorCheck[] }>(),
     handler: async (): Promise<{ checks: DoctorCheck[] }> => ({ checks: await manager.doctor() }),
   });
-  return [getState, updateConfig, runDoctor] as const;
+  const updatePreferences = defineRpcFunction({
+    name: "update-devtool-preferences",
+    type: "action",
+    jsonSerializable: true,
+    args: [s.object({ dark: s.boolean() })],
+    returns: objectResult<DevtoolPreferences>(),
+    handler: (value) => devtoolPreferences(manager, value),
+  });
+  return [getState, updateConfig, runDoctor, updatePreferences] as const;
 }

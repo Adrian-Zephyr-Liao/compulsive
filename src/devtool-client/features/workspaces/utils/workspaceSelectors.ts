@@ -25,6 +25,7 @@ function needsAttention(status: WorkspaceMemberStatus | undefined): boolean {
     status?.conflicts.length ||
     status?.behind ||
     status?.unpushed ||
+    status?.forcePushRequired ||
     status?.comparisonError,
   );
 }
@@ -42,7 +43,8 @@ export function filterWorkspaceMembers(
     const stateMatches =
       filters.state === "all" ||
       (filters.state === "attention" && needsAttention(observation)) ||
-      (filters.state === "unpushed" && Boolean(observation?.unpushed)) ||
+      (filters.state === "unpushed" &&
+        Boolean(observation?.unpushed || observation?.forcePushRequired)) ||
       (filters.state === "conflicts" && Boolean(observation?.conflicts.length));
     return (
       (filters.mode === "all" || mode === filters.mode) &&
@@ -67,7 +69,9 @@ export function countWorkspaceStatuses(
   return {
     all: members.length,
     attention: observations.filter(needsAttention).length,
-    unpushed: observations.filter((observation) => observation.unpushed).length,
+    unpushed: observations.filter(
+      (observation) => observation.unpushed || observation.forcePushRequired,
+    ).length,
     conflicts: observations.filter((observation) => observation.conflicts.length).length,
   };
 }
@@ -76,6 +80,7 @@ export function isTaskComplete(status: WorkspaceMemberStatus | undefined): boole
   return Boolean(
     status?.mergedIntoDefault &&
     !status.unpushed &&
+    !status.forcePushRequired &&
     !status.changes.length &&
     !status.conflicts.length,
   );
@@ -120,8 +125,8 @@ export function canPush(
     fresh &&
     member.mode === "worktree" &&
     !member.detached &&
-    status?.unpushed &&
-    !status.changes.length &&
+    status &&
+    (status.forcePushRequired || (status.unpushed && !status.changes.length)) &&
     !status.conflicts.length,
   );
 }

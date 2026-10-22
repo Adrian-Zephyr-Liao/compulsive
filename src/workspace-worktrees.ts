@@ -107,20 +107,9 @@ export async function addGitWorktree(
     arguments_.push("-b", branch, "--", worktreePath);
     if (startPoint) arguments_.push(startPoint);
   } else arguments_.push("--", worktreePath, branch);
-  let added = false;
   try {
     await runGit(arguments_);
-    added = true;
   } catch (error) {
-    if (added) {
-      await removeGitWorktree(repositoryPath, worktreePath).catch(() => undefined);
-      if (createBranch) {
-        await runGit(["branch", "-D", "--", branch], {
-          cwd: repositoryPath,
-          allowFailure: true,
-        });
-      }
-    }
     if (error instanceof CompulsiveError && error.code === "GIT_FAILED") {
       throw new CompulsiveError("CONFLICT", error.message, error.details);
     }

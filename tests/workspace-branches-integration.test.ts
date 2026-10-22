@@ -66,6 +66,28 @@ describe("workspace branch lifecycle", () => {
     beforeEach(async () => {
       scenario = await prepareReference(base);
     }, 30_000);
+    it("fast-forwards development on the default branch without arming a force push", async () => {
+      const { manager, cloned, selectedMainRepository, clonedMainPath, sandbox } = scenario;
+      const input = { workspaceId: cloned.id, repositoryId: selectedMainRepository.id };
+      await manager.promoteWorkspaceReference({ ...input, branch: "main" });
+      const writer = join(sandbox, "main-writer");
+      await base.git(
+        sandbox,
+        "clone",
+        "-q",
+        `file://${join(sandbox, "selected-main.git")}`,
+        writer,
+      );
+      await base.commit(writer, "main-writer.txt");
+      await base.git(writer, "push", "-q", "origin", "main");
+      const remoteHead = (await base.git(writer, "rev-parse", "HEAD")).stdout;
+      await manager.rebaseWorkspaceMember(input);
+      expect((await base.git(clonedMainPath, "rev-parse", "HEAD")).stdout).toBe(remoteHead);
+      expect(
+        (await manager.searchWorkspaces()).find((workspace) => workspace.id === cloned.id)!
+          .members[0],
+      ).not.toHaveProperty("forcePushBase");
+    }, 20000);
     it("updates references and promotes dirty reference code without inventing an upstream", async () => {
       const { manager, cloned, selectedMainRepository, clonedMainPath, selectedMainPath } =
         scenario;
@@ -263,6 +285,78 @@ describe("workspace branch lifecycle", () => {
         mergedIntoDefault: true,
       });
     }, 20_000);
+    it("keeps the original force-push lease across repeated rebases and remote writers", async () => {
+      const { manager, cloned, selectedMainRepository, clonedMainPath, selectedMainPath, sandbox } =
+        scenario;
+      const input = { workspaceId: cloned.id, repositoryId: selectedMainRepository.id };
+      const originalRemote = (
+        await base.git(clonedMainPath, "rev-parse", "origin/feat/promoted-reference")
+      ).stdout.trim();
+      await base.commit(selectedMainPath, "main-next.txt");
+      await base.git(selectedMainPath, "push", "-q", "origin", "main");
+      await manager.rebaseWorkspaceMember(input);
+      const writer = join(sandbox, "lease-writer");
+      await base.git(
+        sandbox,
+        "clone",
+        "-q",
+        "--branch",
+        "feat/promoted-reference",
+        `file://${join(sandbox, "selected-main.git")}`,
+        writer,
+      );
+      await base.commit(writer, "remote-next.txt");
+      await base.git(writer, "push", "-q", "origin", "HEAD");
+      const remoteHead = (await base.git(writer, "rev-parse", "HEAD")).stdout.trim();
+      await manager.rebaseWorkspaceMember(input);
+      const member = (await manager.searchWorkspaces()).find((w) => w.id === cloned.id)!
+        .members[0]!;
+      expect(member).toMatchObject({ forcePushBase: originalRemote });
+      const unchanged = await manager.promoteWorkspaceReference({
+        ...input,
+        branch: "feat/promoted-reference",
+      });
+      expect(unchanged.members[0]).toMatchObject({ forcePushBase: originalRemote });
+      await expect(manager.pushWorkspaceMember({ ...input, force: true })).rejects.toMatchObject({
+        code: "GIT_FAILED",
+      });
+      expect(
+        (await base.git(writer, "ls-remote", "origin", "refs/heads/feat/promoted-reference")).stdout
+          .trim()
+          .split("\t")[0],
+      ).toBe(remoteHead);
+    }, 20000);
+    it("does not arm a force-push lease for remote commits the checkout never contained", async () => {
+      const { manager, cloned, selectedMainRepository, sandbox } = scenario;
+      const writer = join(sandbox, "unseen-remote-writer");
+      await base.git(
+        sandbox,
+        "clone",
+        "-q",
+        "--branch",
+        "feat/promoted-reference",
+        `file://${join(sandbox, "selected-main.git")}`,
+        writer,
+      );
+      await base.commit(writer, "unseen-remote.txt");
+      await base.git(writer, "push", "-q", "origin", "HEAD");
+      const remoteHead = (await base.git(writer, "rev-parse", "HEAD")).stdout.trim();
+      await expect(
+        manager.rebaseWorkspaceMember({
+          workspaceId: cloned.id,
+          repositoryId: selectedMainRepository.id,
+        }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      expect(
+        (await manager.searchWorkspaces()).find((workspace) => workspace.id === cloned.id)!
+          .members[0],
+      ).not.toHaveProperty("forcePushBase");
+      expect(
+        (await base.git(writer, "ls-remote", "origin", "refs/heads/feat/promoted-reference")).stdout
+          .trim()
+          .split("\t")[0],
+      ).toBe(remoteHead);
+    }, 20000);
     it("integrates a remote writer before pushing local development", async () => {
       const { manager, cloned, selectedMainRepository, clonedMainPath, sandbox } = scenario;
       await writeFile(join(clonedMainPath, "local-next.txt"), "local next\n");

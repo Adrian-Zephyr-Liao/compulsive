@@ -1,0 +1,98 @@
+# Local editor workbench
+
+## Scope and reference
+
+The user selected a complete **local** editor: editing/saving, file management, search, columns, Git and terminals, inspired by [Mayoi](https://github.com/sorrycc/Mayoi) and its [screenshots](https://github.com/sorrycc/Mayoi/tree/main/docs/screenshots). SSH and account/cloud sync are not in this scope. Commit-message generation is an explicit opt-in integration with the installed Codex CLI, not a general provider framework. Keep React, Ant Design and CodeMirror; Mayoi's Go/MyGo/Ghostty runtime and application branding are not copied.
+
+This specification owns the local editor's acceptance checklist and verification record. The editor supersedes the former read-only preview without changing its URL or shared connection ownership.
+
+## Visual contract
+
+- An edge-to-edge editor route, without the requirement dashboard's broad sidebar, summary cards or footer. Returning to the requirement remains explicit.
+- A compact title/search bar, a narrow rail for the requirement's repositories, native Segmented Explorer/Search/Source Control modes, editable-card file/terminal Tabs, Breadcrumb and a bottom status bar.
+- Neutral charcoal default surfaces, restrained blue-violet selection/accent, thin dividers and no card shadows. Light mode uses the same structure and typography.
+- Follow the global Ant Design scale rather than shrinking the whole editor: 14px body/navigation, 12px secondary text, default 13px code, 32px controls/tree rows, 40px card tabs and 48px titlebar. Use 8/16px spacing, native component states and semantic theme colors. Sidebar and columns are resizable. Dirty badges do not replace close buttons; inactive terminal tabs remain mounted. Bound tab bodies to the available panel height so CodeMirror/xterm cannot grow the layout. Preferences use a centered Modal with a scrollable body on short viewports.
+- Icons use the installed icon family; hover labels, keyboard focus, loading, empty, error and unsaved states are designed, not placeholders.
+- Repository entry defaults to **Changes / Diff**: grouped local changes on the left and a read-only, embedded diff on the right. **All files** switches to the existing editor without discarding buffers or tab/view state. A clean checkout has an explicit empty state and an All files action, not an empty source editor.
+- Embedded review starts with inline diff for readable narrow panels. The inline/side-by-side choice survives file and view switches for the current editor session; existing modal comparisons retain their side-by-side default.
+
+## Functional acceptance
+
+### Files and documents
+
+- Lazy directory tree, file-type icons, modified/ignored Git decorations, collapse/refresh, selected-file reveal and context actions.
+- Create a text file or directory, rename/move and move files/directories to the OS Trash. No silent overwrite, root mutation, symlink traversal or permanent recursive-delete fallback.
+- Edit UTF-8 text with highlighting, indentation, bracket/quote closing, folding, line commands, selectable wrap, per-document undo/redo, Vim mode and caret/encoding/line-ending status.
+- Explicit save/save all and opt-in auto save. A save carries the loaded content version; conflicting external edits must not be overwritten. Dirty tabs visibly mark changes and require a choice before closing or leaving.
+- Preview tabs replace only clean transient tabs. Double-click/edit pins a tab. Tabs close, reopen and move/reorder between independently resizable editor columns. A document shown twice shares content, while views retain carets/scroll positions.
+- Local PNG/JPEG/GIF/WebP/BMP image preview and safe Markdown/SVG preview beside source; no execution of project HTML or automatic remote-image requests.
+- Disk changes refresh clean documents, never overwrite dirty buffers, and produce a conflict/reload indication. Use filesystem events and bounded long waits, not timed Git-status polling.
+
+### Navigation, search and preferences
+
+- Quick open with fuzzy file matching and recent/open documents; command palette; go to line and document symbol; documented keyboard shortcuts.
+- Folder content search with case/whole-word/regex and include/exclude patterns, bounded/cancellable work and per-file/line results that open the correct location.
+- Replace in a file and across search results with a preview and explicit confirmation; reject stale versions rather than overwrite newer disk edits.
+- Persist layout, open/pinned tabs, carets, sidebar/panel dimensions, editor preferences and recent commands beside CPL config, not browser storage. Do not persist document content or terminal transcripts.
+- Chinese/English controls and command labels, global dark/light appearance shared with the requirement/settings pages, editor font size/line height, wrapping, Vim and auto-save preferences. The global choice lives in `devtool-preferences.json`; legacy per-session theme values do not override it.
+
+### Source control
+
+- Initial review covers local staged, unstaged and untracked changes, not the requirement branch's entire difference from `main/master`. Staged review compares HEAD to the index; unstaged review compares the index to disk; new files compare empty content to disk. The same file can appear separately in both staged and unstaged groups. The first non-conflicted item is selected automatically; removing a selection falls back to another available item.
+- Review retains manual Git refresh and displays saved disk contents only. Unsaved editor buffers remain mounted when switching modes, with a warning that they are not included in the diff. Conflicts are identified explicitly rather than rendered as a misleading two-way diff; unavailable or unsupported binary content retains the VS Code escape hatch. Changing selections or repositories invalidates pending diff responses.
+- Signature-checked PNG/JPEG/GIF/WebP/BMP changes use read-only before/after image previews, including staged, unstaged, untracked, deleted and historical versions. Git blobs retain their original bytes; each side is limited to 4 MiB and uses the same member/path restrictions as other previews. A missing side has an explicit empty state, and native Ant Design image preview provides zoom. Images do not expose text hunk actions or become editable source.
+- The existing route accepts optional `view=changes|files`. Without a view or file parameter it defaults to changes; legacy explicit `?file=...` links still open the full editor. The explicit changes view takes precedence over a file parameter. This is URL view state, not a persisted session-format change.
+- On-demand status grouped by conflicts/staged/unstaged/untracked; branch/upstream/ahead/behind; changed-file tree decorations.
+- Stage/unstage selected files and all; confirmed discard; commit/amend/undo and fetch/fast-forward pull/push with explicit targets and existing branch/upstream/leased-force safeguards.
+- Pull fetches the configured upstream, fixes its target commit, and rechecks membership and the local fingerprint before fast-forward merge. It disables autostash and refuses ignored-file collisions rather than overwriting local ignored data.
+- **Discard all changes** is available from review and Source Control. The backup checkbox defaults to **off**, and no-backup execution requires a second explicit permanent-loss confirmation. Both modes revalidate member identity, every changed path and a content-sensitive status fingerprint. No-backup mode restores only the validated HEAD/index paths and deletes reviewed new regular files that are not in HEAD; it does not create a stash. Selecting backup creates a uniquely named repository-wide Git stash including untracked files and returns a persistent ID plus `git stash apply --index <oid>`. Neither mode moves HEAD, deletes branches or touches ignored files. Cancellation or stale/unsafe preflight must not change files. Failed/partial execution must not claim success or automatically overwrite concurrent edits while rolling back; any verified backup is retained and reported. Without backup, discarded data may be unrecoverable. Pause external agent/editor writes before cleanup; CPL's lock does not serialize external processes.
+- Bulk discard rejects unsaved editor buffers, unborn HEAD, excluded paths, symlinks, submodules/directories, unmerged entries and unfinished merge/rebase/cherry-pick/revert/sequencer operations. Changed-file snapshots are bounded to 1,000 files, 4 MiB per file and 64 MiB total; an incomplete snapshot leaves status readable but blocks bulk discard. The untracked/binary file bytes and file identities participate in the fingerprint, not just porcelain labels and text diff output.
+- The discard RPC requires an explicit boolean backup choice, so an old cached client cannot omit the choice and silently enter the new no-backup default. Repository changes/unmount dismiss and invalidate pending discard confirmations before any RPC is sent.
+- **Generate with Codex** is in the existing commit form. It sends only the full staged patch after a data-transfer/replacement confirmation, never automatically stages or commits. Empty/conflicted indices, excluded staged paths, more than 1,000 staged files or a patch above 128 KiB are rejected rather than truncated. The server revalidates the root and fingerprint before and after generation; the client preserves text typed in the meantime and ignores stale/unmounted results. Failure preserves the existing draft.
+- Generation uses an ephemeral read-only CLI run in an isolated temporary directory, with a 120-second timeout and bounded output. The installed CLI's authentication/default model is used; custom user configuration/rules and the shell/apps/plugins/hooks/multi-agent feature gates are disabled, as is web search. No new Codex project or persistent chat is created. CLI authentication/provider availability and managed policies remain external acceptance boundaries; do not describe this as an OS-wide read/network isolation guarantee.
+- Unified/side-by-side diffs with word changes, unchanged-line folding, change navigation and hunk actions; commit history/graph, per-commit changes, branch selection and blame.
+- Git commands cannot select arbitrary repositories or expose credential-bearing errors. File and Git operations revalidate the current member/path. No background push, destructive reset or unconditional force push.
+- Staging accepts individual reviewed files, not recursive directory requests. Commit/amend reject excluded staged paths even when another editor staged them. Excluded non-ignored changes produce a bilingual warning rather than a false clean state and block operations that require a clean checkout. Deleted files remain stageable, unstageable and explicitly restorable even when their parent directory is gone.
+
+### Terminals
+
+- Real local PTYs rendered with xterm.js, created only by explicit user action after a non-sandbox warning. Initial cwd is the selected member; a shell itself has the user's machine permissions and may change cwd.
+- Interactive input/output, resize, multiple sessions, close/restart and bottom/side/editor-tab placement; Ctrl+C must reach the shell.
+- Authenticated local transport, bounded output/session limits, event/long-wait delivery, cleanup on close and server shutdown. Do not inherit unrelated agent/API credential environment variables.
+
+## Safety and evidence
+
+All filesystem RPCs resolve roots from current requirement membership. Common secret, Git metadata and managed-worktree paths remain excluded. Content version checks, bounded reads, operation serialization and recoverable Trash are server responsibilities, never just UI guards. A local shell is not a filesystem sandbox, and the UI must say so.
+
+Acceptance requires temporary-repository tests for real writes, stale saves, path/symlink failures, search/replace, Git outcomes and real PTY I/O/cleanup; frontend state tests for tabs/columns/dirty transitions; static and package builds; and isolated browser walkthroughs of the named interactions, both languages and themes. No live repository mutation is needed to test implementation. Commit/push/publish remain separate user-authorized delivery actions.
+
+## Implementation record
+
+Implemented on 2026-10-22. Internal RPC ownership is split across file reads/actions, search, Git/session/watch and terminals; no unrestricted filesystem or shell-command RPC is exposed. Both user READMEs and the frontend responsibility map describe the entrypoint and limits.
+
+### Local evidence
+
+- `pnpm run test --no-file-parallelism`: 186 tests passed in 31 files. Temporary repositories exercise atomic/versioned writes, rename reservations, protected paths, bounded asset reads, search replacement/cancellation/regex timeouts, Git status/stage/commit/undo/history/blame/hunks/push, validated session persistence, real native PTY input/output/Ctrl+C and watcher cleanup. The native Trash adapter's literal arguments and failure paths have separate mocked tests.
+- `pnpm run check`: documentation, architecture, formatting, TypeScript and lint passed. `antd lint src/devtool-client/features/editor --format json`: no issues.
+- `pnpm run prepack`: ESM/CJS, declarations, publint, attw and the browser build passed. `npm pack --dry-run --ignore-scripts --json` includes the CLI and lazy editor/preview/terminal assets. The Ant Design vendor chunk retains an approximately 902 kB build warning; editor, languages, Markdown, diff and terminal code are lazy-loaded.
+- `pnpm audit --prod --registry=https://registry.npmjs.org` reports no known vulnerabilities. The configured private registry has no audit endpoint, so the audit explicitly uses the public registry. The evaluated `trash` dependency was removed; recoverable deletion uses the macOS 15+ system command with one literal absolute path. Other systems reject deletion instead of permanently removing files.
+- An isolated built-CLI/browser fixture uses a synthetic repository, a local `file://` remote and a separate CPL data directory. Browser checks observed actual edit/save, quick open, dirty navigation protection, search/result navigation, Markdown preview, columns, session/theme restoration and real PTY startup/output. Later walkthroughs verified native Trash of `literal[1].txt` while preserving `literal1.txt`, actual rename, code diff rendering, hunk staging and a commit whose Git result was checked on disk.
+- Visual acceptance covers Chinese/light and English/dark surfaces, file-tree alignment, terminal placement and removal of blank reserved panel space. Browser regressions fixed during acceptance include deferred Modal mounting before CodeMirror initialization, context-menu clicks bubbling to tree selection, and terminal theme reapplication after a locale change. Screenshots use only synthetic content: [light](screenshots/editor-light.png), [dark](screenshots/editor-dark.png).
+- After the final frontend refinements, the focused route/state/graph/locale/RPC regression passed 13 tests in five files, and the browser build and feature lint were rerun. The global Vite+ `cpl` remains linked to this checkout; its local server was restarted on port 7392 and the connected dashboard with the new editor action was observed. This is local-link acceptance, not a published npm installation.
+- Ant Design refinement: removed the editor-wide 12px/radius/control-height overrides and replaced manual file/terminal tabs with native editable-card Tabs. The focused tabs/state/route/theme/locale/PTY regression passed 18 tests in six files; `pnpm run check`, feature Ant Design lint and the browser build passed. An isolated browser verified dirty-close cancellation, save, drag reorder, split columns, Markdown preview, terminal command output and retained output across two terminal tabs, both locales/themes, centered preferences and a 703px-wide panel without page/header overflow. Browser acceptance also caught and fixed Ant Design 6's inner-body/flex-holder height mismatch, which otherwise cropped CodeMirror and made xterm repeatedly refit. Current synthetic examples: [light](screenshots/editor-antd-light.png), [dark](screenshots/editor-antd-dark.png), [preferences](screenshots/editor-antd-preferences.png). No full-suite or package-publication rerun is claimed for this visual-only refinement.
+
+### Internal ownership cleanup
+
+The editor now lives under `features/editor/`, with components, controller hooks, pure utilities and shared feature types. Server-side files, paths, search, Git, sessions, watchers and terminals live under `src/project/`. This changes internal ownership, not routes, RPC names, public library exports or persisted session formats. Unused preview copy, forwarding exports and duplicate defaults were removed without adding dependencies or per-control wrapper layers.
+
+Focused regression after relocation passed 22 tests in three files (`project-files`, `editor-state`, `editor-route`); a fresh full serial run passed all 200 tests in 34 files. Added cases cover parent/sibling/prefix-neighbor path rejection, dirty-buffer refresh, explicit reload, late saves preserving newer typing, and keyboard command matching. A fresh isolated browser checked actual saves on disk, dirty-close and route-leave cancellation, quick open, file-operation and Git-history dialogs, shared-document columns and Chinese/English controls. Only its synthetic files were edited; its temporary directory and server were then removed. The existing user server on port 7392 remained available.
+
+`pnpm run check` passed documentation, architecture, formatting, lint and types; feature Ant Design lint reported no issues. `pnpm run prepack` passed ESM/CJS, declarations, publint, attw and browser builds. The final `npm pack --dry-run --ignore-scripts --json` listed 151 files at unchanged version 0.1.6, including the new `EditorPage` assets and no old `CodePreviewPage` assets. The existing Ant Design vendor-size warning remains; no npm publication or real remote Git acceptance is implied.
+
+### Explicit limits
+
+This is a local browser editor, not a native Mayoi port or a language server. Symbol hints are syntax-neutral. SSH, cloud/account sync, general AI provider selection, project HTML execution and large/binary source editing are excluded. Text and image reads are bounded to 4 MiB; documents, search jobs/results and terminals have separate limits.
+
+Shells are not sandboxed. Filename exclusions cannot detect every secret, and filesystem identity/version checks do not defend against a hostile local process repeatedly swapping ancestors. Unsaved buffers and terminal transcripts are not persisted; browser refresh/close requires the user's native discard confirmation. A server restart may require Devframe authentication again; seamless reauthentication with dirty buffers has not been accepted.
+
+Real external Git hosts, cross-platform native PTY/Trash behavior and OS-level IME/VoiceOver acceptance were not exercised. No actual user repository was modified during editor testing. Git delivery and npm publication are not part of this implementation.

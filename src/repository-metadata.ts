@@ -1,10 +1,10 @@
-import { relative, isAbsolute, basename } from "node:path";
+import { relative, isAbsolute, basename, sep } from "node:path";
 import { readOrigin } from "./git.js";
 import { parseGitRemote } from "./git-url.js";
 
 export function pathIsInside(parent: string, child: string): boolean {
   const difference = relative(parent, child);
-  return difference === "" || (!difference.startsWith("..") && !isAbsolute(difference));
+  return difference !== ".." && !difference.startsWith(`..${sep}`) && !isAbsolute(difference);
 }
 
 type RepositoryMetadata =

@@ -8,18 +8,38 @@ import { createStateFunctions } from "./devtool/state-rpc.js";
 import { createAuditFunctions } from "./devtool/audit-rpc.js";
 import { createWorkspaceFunctions } from "./devtool/workspace-rpc.js";
 import { createIntegrationFunctions } from "./devtool/integration-rpc.js";
+import { createFileFunctions } from "./devtool/files-rpc.js";
+import { createFileActionFunctions } from "./devtool/file-actions-rpc.js";
+import { createTerminalFunctions, type ProjectTerminals } from "./devtool/terminal-rpc.js";
+import { createProjectTerminals } from "./project/terminals.js";
+import { createSearchFunctions } from "./devtool/search-rpc.js";
+import { createEditorFunctions } from "./devtool/editor-rpc.js";
+import { createProjectWatcher } from "./project/watch.js";
 export type { DevtoolState, DevtoolWorkspace } from "./devtool/types.js";
 
-export function createServerFunctions(manager: RepositoryManager) {
+export function createServerFunctions(
+  manager: RepositoryManager,
+  terminals?: ProjectTerminals,
+  watcher?: ReturnType<typeof createProjectWatcher>,
+) {
   return [
     ...createStateFunctions(manager),
     ...createAuditFunctions(manager),
     ...createWorkspaceFunctions(manager),
     ...createIntegrationFunctions(manager),
+    ...createFileFunctions(manager),
+    ...createFileActionFunctions(manager),
+    ...createTerminalFunctions(manager, terminals),
+    ...createSearchFunctions(manager),
+    ...createEditorFunctions(manager, watcher),
   ] as const;
 }
 
-export function createCompulsiveDevframe(manager: RepositoryManager) {
+export function createCompulsiveDevframe(
+  manager: RepositoryManager,
+  terminals?: ProjectTerminals,
+  watcher?: ReturnType<typeof createProjectWatcher>,
+) {
   return defineDevframe({
     id: "compulsive",
     name: "Compulsive",
@@ -38,7 +58,7 @@ export function createCompulsiveDevframe(manager: RepositoryManager) {
     },
     setup(ctx) {
       const rpc = ctx.scope("compulsive").rpc;
-      for (const fn of createServerFunctions(manager)) rpc.register(fn);
+      for (const fn of createServerFunctions(manager, terminals, watcher)) rpc.register(fn);
     },
   });
 }
@@ -56,12 +76,28 @@ export async function startCompulsiveDevtool(
   manager: RepositoryManager,
   options: StartCompulsiveDevtoolOptions = {},
 ): Promise<CompulsiveDevtoolServer> {
-  return createDevServer(createCompulsiveDevframe(manager), {
-    host: "localhost",
-    openBrowser: options.openBrowser ?? true,
-    auth: true,
-    mcp: false,
-  });
+  const terminals = createProjectTerminals(manager);
+  const watcher = createProjectWatcher(manager);
+  try {
+    const server = await createDevServer(createCompulsiveDevframe(manager, terminals, watcher), {
+      host: "localhost",
+      openBrowser: options.openBrowser ?? true,
+      auth: true,
+      mcp: false,
+    });
+    return {
+      origin: server.origin,
+      close: async () => {
+        terminals.dispose();
+        watcher.dispose();
+        await server.close();
+      },
+    };
+  } catch (error) {
+    terminals.dispose();
+    watcher.dispose();
+    throw error;
+  }
 }
 
 declare module "devframe" {

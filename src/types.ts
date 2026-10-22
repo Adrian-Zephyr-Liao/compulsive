@@ -228,8 +228,10 @@ export interface WorkspaceStatusRegistry {
 export interface WorkspaceBranchSyncItem {
   repositoryId: RepositoryId;
   alias: string;
-  outcome: "synced" | "skipped" | "conflict" | "failed";
+  outcome: "synced" | "skipped" | "conflict" | "failed" | "push-required";
   message: string;
+  phase?: "preflight" | "stash" | "fetch" | "rebase" | "push" | "restore";
+  backup?: { oid: string; restored: boolean };
 }
 
 export interface WorkspaceBranchSyncResult {

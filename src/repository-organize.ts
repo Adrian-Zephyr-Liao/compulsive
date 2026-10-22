@@ -1,4 +1,4 @@
-import { realpath, readdir, unlink, rmdir, stat, mkdir, rename } from "node:fs/promises";
+import { realpath, readdir, unlink, rmdir, stat, lstat, mkdir, rename } from "node:fs/promises";
 import { resolve, relative, join, dirname } from "node:path";
 import { type ManagerConfig, type RepositoryRecord, type OrganizePlan } from "./types.js";
 import { homedir, tmpdir } from "node:os";
@@ -143,6 +143,17 @@ export async function planOrganize(
     throw new CompulsiveError("FILESYSTEM_FAILED", "Repository classification escapes the root.");
   }
   const isNoop = source === target;
+  if (!isNoop) {
+    const worktrees = await runGit(["worktree", "list", "--porcelain", "-z"], { cwd: source });
+    if (
+      !(await lstat(join(source, ".git"))).isDirectory() ||
+      worktrees.stdout.split("\0").filter((field) => field.startsWith("worktree ")).length > 1
+    )
+      throw new CompulsiveError(
+        "CONFLICT",
+        "Organizing linked worktrees or repositories with linked worktrees/external Git directories is not supported. Resolve their layout with Git first; no paths were moved.",
+      );
+  }
   if (!isNoop && (pathIsInside(source, target) || pathIsInside(target, source))) {
     throw new CompulsiveError("CONFLICT", "Source and target repositories cannot be nested.");
   }

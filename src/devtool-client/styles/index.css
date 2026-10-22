@@ -26,10 +26,5 @@
     body {
       @apply overflow-auto;
     }
-
-    #app,
-    .ant-app {
-      @apply min-w-[760px];
-    }
   }
 }

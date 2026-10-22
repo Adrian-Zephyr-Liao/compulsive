@@ -114,7 +114,7 @@ export function DoctorPanel({
           <Flex align="flex-start" gap={16}>
             <Flex
               align="center"
-              className="size-10 shrink-0 rounded-lg bg-[var(--ant-color-primary-bg)] text-lg text-[var(--ant-color-primary)]"
+              className="size-10 shrink-0 rounded-lg bg-[var(--ant-color-primary-bg)] text-lg text-[var(--ant-color-primary-text)]"
               justify="center"
             >
               <ToolOutlined />

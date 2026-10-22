@@ -9,15 +9,19 @@ import { startCodexTurn } from "../src/codex.js";
 describe.sequential("Codex app-server", () => {
   let binDir = "";
   let originalPath = "";
+  let pendingTurn: ReturnType<typeof startCodexTurn> | undefined;
 
   beforeEach(async () => {
+    pendingTurn = undefined;
     originalPath = process.env.PATH ?? "";
     binDir = await mkdtemp(join(tmpdir(), "compulsive-codex-"));
     const executable = join(binDir, "codex");
     await writeFile(
       executable,
       `#!/usr/bin/env node
+const { watchFile, unwatchFile } = require("node:fs");
 const readline = require("node:readline");
+const completionPath = ${JSON.stringify(join(binDir, "complete-turn"))};
 const lines = readline.createInterface({ input: process.stdin });
 let initialized = false;
 lines.on("line", (line) => {
@@ -52,9 +56,11 @@ lines.on("line", (line) => {
       process.stdout.write(JSON.stringify({ method: "turn/completed", params: { turn: { status: "failed" } } }) + "\\n");
       return;
     }
-    setTimeout(() => {
+    watchFile(completionPath, { interval: 10 }, (stat) => {
+      if (!stat.nlink) return;
+      unwatchFile(completionPath);
       process.stdout.write(JSON.stringify({ method: "turn/completed", params: { turn: { status: "completed" } } }) + "\\n");
-    }, 1000);
+    });
   }
 });
 `,
@@ -66,20 +72,27 @@ lines.on("line", (line) => {
 
   afterEach(async () => {
     process.env.PATH = originalPath;
-    await rm(binDir, { force: true, recursive: true });
+    try {
+      if (pendingTurn) {
+        await writeFile(join(binDir, "complete-turn"), "");
+        await pendingTurn.then(
+          (turn) => turn.completion,
+          () => undefined,
+        );
+      }
+    } finally {
+      await rm(binDir, { force: true, recursive: true });
+    }
   });
 
   it("returns when a persistent workspace-scoped turn starts", async () => {
-    const result = await Promise.race([
-      startCodexTurn("/workspace", "resolve conflicts"),
-      new Promise<never>((_resolve, reject) =>
-        setTimeout(() => reject(new Error("startCodexTurn waited for completion")), 900),
-      ),
-    ]);
+    pendingTurn = startCodexTurn("/workspace", "resolve conflicts");
+    const result = await pendingTurn;
     expect(result).toMatchObject({
       threadId: "thread-1",
       turnId: "turn-1",
     });
+    await writeFile(join(binDir, "complete-turn"), "");
     await expect(result.completion).resolves.toEqual({ status: "completed" });
   });
 

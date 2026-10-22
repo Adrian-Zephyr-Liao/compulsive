@@ -95,6 +95,27 @@ describe("cpl CLI", () => {
     expect(output.join("\n")).toContain("DevTool ready");
     expect(output.join("\n")).toContain("http://localhost:7392");
   });
+  it("returns one JSON value when forgetting a repository without deleting its files", async () => {
+    const repositoryPath = join(sandbox, "forgotten");
+    await execFileAsync("git", ["init", "-q", repositoryPath]);
+    const manager = createRepositoryManager({ dataDir, defaultRootDir: rootDir });
+    await manager.initialize();
+    const repository = await manager.register({ path: repositoryPath });
+    const output: string[] = [];
+    const errors: string[] = [];
+    expect(
+      await runCli(["forget", repository.id, "--yes", "--json"], {
+        manager,
+        isTTY: false,
+        stdout: (value) => output.push(value),
+        stderr: (value) => errors.push(value),
+      }),
+    ).toBe(0);
+    expect(JSON.parse(output.join("\n"))).toEqual({ forgotten: repository.id });
+    expect(errors).toEqual([]);
+    await expect(access(join(repositoryPath, ".git"))).resolves.toBeUndefined();
+    await expect(manager.search()).resolves.toEqual([]);
+  });
 
   it("keeps scan read-only unless --register is provided", async () => {
     const scanRoot = join(sandbox, "scan");
@@ -513,6 +534,10 @@ describe("cpl CLI", () => {
       installAgentInstructions: async () => "unchanged" as const,
     };
 
+    expect(await runCli(["--help"], context)).toBe(0);
+    expect(output.at(-1)).toContain("Workspace and worktree removal can delete files");
+    expect(output.at(-1)).not.toContain("never deletes repository files");
+    output.length = 0;
     expect(await runCli(["--no-color", "init", "--root", rootDir], context)).toBe(0);
     expect(output.at(-1)).toContain("Initialized");
     expect(await runCli(["list", "--unknown"], context)).toBe(2);

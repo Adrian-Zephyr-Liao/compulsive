@@ -11,8 +11,10 @@ import { findWorkspace, findRepository } from "./workspace-registry.js";
 import { resolve, dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { CompulsiveError } from "./errors.js";
+import { runGit } from "./git.js";
 import {
   pathContains,
+  canonicalPath,
   verifyManagedLink,
   unlinkExpectedLink,
   createVerifiedLink,
@@ -35,11 +37,12 @@ export async function deleteWorkspace(paths: StoragePaths, id: WorkspaceId): Pro
   ]);
   const { index, workspace } = findWorkspace(workspaceRegistry, id);
   const workspacePath = resolve(workspace.absolutePath);
+  const protectedRoots = await Promise.all(
+    [homedir(), config.rootDir, config.workspaceRoot].map(canonicalPath),
+  );
   if (
     workspacePath === dirname(workspacePath) ||
-    [homedir(), config.rootDir, config.workspaceRoot].some(
-      (protectedPath) => workspacePath === resolve(protectedPath),
-    )
+    protectedRoots.some((protectedPath) => pathContains(workspacePath, protectedPath))
   ) {
     throw new CompulsiveError(
       "CONFLICT",
@@ -56,11 +59,20 @@ export async function deleteWorkspace(paths: StoragePaths, id: WorkspaceId): Pro
       `Workspace contains another registered Workspace: ${nestedWorkspace.name}`,
     );
   }
+  const nestedRepository = repositoryRegistry.repositories.find((repository) =>
+    pathContains(workspacePath, repository.absolutePath),
+  );
+  if (nestedRepository)
+    throw new CompulsiveError(
+      "CONFLICT",
+      `Workspace contains a canonical repository: ${nestedRepository.absolutePath}`,
+    );
   const links: Array<{ path: string; target: string }> = [];
   const worktrees: Array<{
     memberPath: string;
     path: string;
     branch: string;
+    head: string;
     detached?: true;
     repositoryPath: string;
     linked: boolean;
@@ -74,6 +86,7 @@ export async function deleteWorkspace(paths: StoragePaths, id: WorkspaceId): Pro
         memberPath: state.memberPath,
         path: state.worktreePath,
         branch: member.branch,
+        head: (await runGit(["rev-parse", "HEAD"], { cwd: state.worktreePath })).stdout,
         ...(member.detached ? { detached: true as const } : {}),
         repositoryPath: repository.absolutePath,
         linked: state.linked,
@@ -110,7 +123,6 @@ export async function deleteWorkspace(paths: StoragePaths, id: WorkspaceId): Pro
     await writeJsonAtomic(paths.workspaces, workspaceRegistry);
   } catch (error) {
     const rollbackErrors = await runRollbacks([
-      ...(moved ? [() => rename(deletionPath, workspacePath)] : []),
       ...removed.map((link) => () => symlink(link.target, link.path)),
       ...removedWorktrees.map((worktree) => async () => {
         await addGitWorktree(
@@ -118,11 +130,12 @@ export async function deleteWorkspace(paths: StoragePaths, id: WorkspaceId): Pro
           worktree.path,
           worktree.branch,
           false,
-          worktree.branch,
+          worktree.head,
           worktree.detached,
         );
         if (worktree.linked) await createVerifiedLink(worktree.memberPath, worktree.path);
       }),
+      ...(moved ? [() => rename(deletionPath, workspacePath)] : []),
     ]);
     if (rollbackErrors.length > 0) {
       throw new CompulsiveError(

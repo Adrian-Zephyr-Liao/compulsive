@@ -69,7 +69,7 @@ export function SystemSettingsPage({
       <div className="mb-6 flex items-start gap-4">
         <Flex
           align="center"
-          className="size-10 shrink-0 rounded-lg bg-[var(--ant-color-primary-bg)] text-lg text-[var(--ant-color-primary)]"
+          className="size-10 shrink-0 rounded-lg bg-[var(--ant-color-primary-bg)] text-lg text-[var(--ant-color-primary-text)]"
           justify="center"
         >
           <SettingOutlined />
@@ -94,7 +94,7 @@ export function SystemSettingsPage({
                 aria-current={active ? "page" : undefined}
                 className={`flex w-full items-start gap-2 rounded-lg border p-4 text-left transition-colors lg:mb-2 ${
                   active
-                    ? "border-[var(--ant-color-primary-border)] bg-[var(--ant-color-bg-container)] text-[var(--ant-color-primary)]"
+                    ? "border-[var(--ant-color-primary-border)] bg-[var(--ant-color-bg-container)] text-[var(--ant-color-primary-text)]"
                     : "border-transparent text-[var(--ant-color-text)] hover:bg-[var(--ant-color-fill-tertiary)]"
                 }`}
                 key={item.key}

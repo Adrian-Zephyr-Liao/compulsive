@@ -1,0 +1,154 @@
+.cpl-editor,
+.cpl-editor-overlay,
+.css-var-compulsive-editor {
+  --editor-bg: var(--ant-color-bg-container);
+  --editor-panel: var(--ant-color-bg-layout);
+  --editor-text: var(--ant-color-text);
+  --editor-muted: var(--ant-color-text-secondary);
+  --editor-border: var(--ant-color-border-secondary);
+  --editor-accent: var(--ant-color-primary-text);
+  --editor-hover: var(--ant-color-fill-quaternary);
+  --editor-selection: var(--ant-color-primary-bg);
+}
+.cpl-editor {
+  background: var(--editor-bg);
+  color: var(--editor-text);
+  font-size: var(--ant-font-size);
+}
+.cpl-editor button {
+  cursor: pointer;
+}
+.cpl-editor button:focus-visible {
+  outline: 1px solid var(--editor-accent);
+  outline-offset: -1px;
+}
+.cpl-editor .ant-splitter-bar {
+  background: var(--editor-border);
+}
+.cpl-editor .ant-tree {
+  background: transparent;
+}
+/* Ant Design's body semantic styles target the inner body, not its flex holder. */
+.cpl-editor .ant-tabs-body-holder {
+  min-height: 0;
+  overflow: hidden;
+}
+.cpl-editor .ant-tree-node-content-wrapper {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.cpl-editor .ant-tree-title {
+  display: block;
+  min-width: 0;
+  flex: 1;
+}
+.cpl-editor .ant-tree-iconEle {
+  flex: none;
+}
+.cpl-editor .ant-tree-list-holder-inner {
+  min-width: 100%;
+}
+.editor-titlebar,
+.editor-tabs,
+.editor-status {
+  background: var(--editor-panel);
+}
+.editor-minirow {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  gap: 8px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--editor-border);
+  font-size: var(--ant-font-size-sm);
+}
+.editor-quickopen {
+  background: var(--editor-bg);
+  border-color: var(--editor-border);
+  color: var(--editor-muted);
+}
+.editor-result:hover {
+  background: var(--editor-hover);
+}
+.editor-breadcrumb ol {
+  flex-wrap: nowrap;
+}
+.editor-breadcrumb li {
+  min-width: 0;
+}
+.editor-breadcrumb li:not(.ant-breadcrumb-separator) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.editor-diff .cm-mergeView {
+  height: 100%;
+  overflow: auto;
+}
+.editor-diff .cm-mergeViewEditors {
+  min-height: 100%;
+}
+.editor-diff .cm-editor {
+  height: 100%;
+}
+.editor-markdown {
+  line-height: 1.8;
+  font-size: 14px;
+  max-width: 900px;
+  margin: 0 auto;
+}
+.editor-markdown h1 {
+  font-size: 28px;
+  line-height: 1.4;
+  margin: 8px 0 20px;
+  font-weight: 600;
+}
+.editor-markdown h2 {
+  font-size: 22px;
+  margin: 24px 0 12px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--editor-border);
+  padding-bottom: 8px;
+}
+.editor-markdown h3 {
+  font-size: 17px;
+  margin: 20px 0 10px;
+  font-weight: 600;
+}
+.editor-markdown p,
+.editor-markdown ul,
+.editor-markdown ol,
+.editor-markdown pre {
+  margin: 12px 0;
+}
+.editor-markdown ul,
+.editor-markdown ol {
+  padding-left: 24px;
+  list-style: revert;
+}
+.editor-markdown a {
+  color: var(--editor-accent);
+}
+.editor-markdown pre {
+  padding: 16px;
+  background: var(--editor-panel);
+  overflow: auto;
+  border: 1px solid var(--editor-border);
+  border-radius: 4px;
+}
+.editor-markdown blockquote {
+  border-left: 3px solid var(--editor-accent);
+  padding-left: 16px;
+  color: var(--editor-muted);
+}
+.editor-markdown table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.editor-markdown td,
+.editor-markdown th {
+  border: 1px solid var(--editor-border);
+  padding: 6px 10px;
+  text-align: left;
+}

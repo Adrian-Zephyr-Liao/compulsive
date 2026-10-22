@@ -50,7 +50,7 @@ GLOBAL OPTIONS
   --no-color   Disable colors
   -h, --help   Show help
 
-Compulsive never deletes repository files.`;
+Workspace and worktree removal can delete files. Review the target before confirming.`;
 
 export type TerminalColorMode = "auto" | "always" | "never";
 

@@ -485,7 +485,7 @@ describe("workspace state", () => {
     ).toBe("origin/feature/exact-name");
   });
 
-  it("syncs development and reference branches while preserving merge conflicts", async () => {
+  it("syncs development and dirty reference branches while preserving rebase conflicts", async () => {
     async function createRemoteRepository(name: string) {
       const remotePath = join(sandbox, `${name}.git`);
       const repositoryPath = join(sandbox, "repositories", name);
@@ -610,7 +610,8 @@ describe("workspace state", () => {
     });
     expect(conflicted.items[1]).toMatchObject({
       repositoryId: reference.id,
-      outcome: "skipped",
+      outcome: "synced",
+      backup: { restored: true },
     });
     await expect(readFile(join(referenceWorktree, "local-draft.txt"), "utf8")).resolves.toBe(
       "keep\n",

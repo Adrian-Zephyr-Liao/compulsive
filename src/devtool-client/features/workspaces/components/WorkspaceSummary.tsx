@@ -36,7 +36,7 @@ export function WorkspaceSummary({
   const { t } = useI18n();
   return (
     <section className="box-border grid min-h-[152px] grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-4 rounded-lg border border-[var(--ant-color-border-secondary)] bg-[var(--ant-color-bg-container)] px-5 py-4">
-      <div className="grid size-12 place-items-center rounded-lg bg-[var(--ant-color-primary-bg)] text-2xl text-[var(--ant-color-primary)]">
+      <div className="grid size-12 place-items-center rounded-lg bg-[var(--ant-color-primary-bg)] text-2xl text-[var(--ant-color-primary-text)]">
         <FolderOpenOutlined />
       </div>
       <div className="grid min-w-0 gap-0">
