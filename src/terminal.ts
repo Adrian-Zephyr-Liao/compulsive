@@ -42,6 +42,7 @@ SYSTEM
   cpl config set-root|set-workspace-root <path>
   cpl config add-scan-root|remove-scan-root <path>
   cpl doctor [--json]
+  cpl doctor worktrees [--all] [--json]
 
 GLOBAL OPTIONS
   --json       Print machine-readable JSON

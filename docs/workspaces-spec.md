@@ -25,15 +25,17 @@ output and exit codes.
    clones its canonical checkout.
 2. CLI additions default to isolated `worktree` members. Link members remain readable for backward
    compatibility and through the library API.
-3. Without `--branch`, the CLI creates a workspace-specific branch. Existing branches are reused
-   only when explicitly selected; `--create-branch` creates an explicitly named branch and inherits
-   the canonical checkout's configured upstream when present.
+3. Without `--branch`, the CLI uses a workspace-specific branch. `--create-branch` creates the exact
+   named branch, fetching and tracking a same-name `origin` branch when available; otherwise the new
+   local branch has no upstream and starts at the requested start point or current commit. Existing
+   local branches are reused. Legacy migration has its own upstream inheritance rule below.
 4. The default workspace root is a `Workspaces` sibling of the configured repository root. For
    example, `/Users/your-name/Code` produces `/Users/your-name/Workspaces`.
 5. `workspaceRoot` can be set during library initialization or through
    `cpl config set-workspace-root`.
-6. Workspace deletion removes only Compulsive-managed links and clean Git worktrees. It never
-   deletes a registered canonical repository or unrelated user files.
+6. Workspace deletion preflights managed links and clean Git worktrees, then removes the entire
+   registered Workspace directory, including non-member files. Canonical repositories are preserved;
+   protected roots and nested registered Workspaces block deletion.
 7. IDE-specific project generation is outside this version. Workspace directories remain compatible
    with terminals and IDEs that can open folders containing links or Git worktrees.
 
@@ -81,6 +83,8 @@ file is loaded.
 ## Data Model
 
 Workspace metadata is stored atomically at `CPL_HOME/workspaces.json` with `schemaVersion: 1`.
+The core fields below are an orientation excerpt; [src/types.ts](../src/types.ts) owns complete public
+types, including optional detached reference-checkout metadata and later API additions.
 
 ```ts
 type WorkspaceId = string & { readonly __brand: "WorkspaceId" };
@@ -207,8 +211,12 @@ Deleting a workspace:
 - Preflight every member before changing anything.
 - Refuse deletion when any worktree is dirty or any member path is unexpected.
 - Remove managed members, then remove the workspace record atomically.
-- Remove the workspace directory only when it is empty or contains only `.DS_Store`.
-- Leave non-member user files and the directory itself untouched.
+- Reject the filesystem root, home, configured repository/Workspace roots, and a directory containing
+  another registered Workspace before changing members.
+- Rename the registered directory to a sibling deletion path before committing the registry change;
+  roll back the directory and removed members if that transaction fails.
+- Recursively remove the deletion directory, including non-member files. A failure after unregistering
+  reports the retained deletion path; it does not claim full removal.
 - Never delete a canonical repository, branch, commit, or remote.
 
 The CLI requires confirmation unless `--yes` is supplied. JSON mode remains non-interactive.
@@ -235,17 +243,57 @@ returns a filesystem/conflict diagnostic naming the affected workspace. `cpl wor
 
 Doctor is read-only and never repairs state automatically.
 
+### Worktree inventory and explicit removal
+
+`cpl doctor worktrees [--all] [--json]` is a separate on-demand inventory. Its schema-version-1 report
+does not replace the existing `cpl doctor --json` check array. It compares all CPL member references
+(including legacy/link paths), Git's linked worktrees and immediate `.worktrees` directories of
+managed repositories. Primary checkouts are excluded. Missing, external and unregistered paths are
+not evidence that CPL owns disposable data. Cached reports and fingerprint-specific ignores live
+beside configuration in `worktree-audit.json` and `worktree-audit-ignores.json`. No fetch or automatic
+cleanup is performed. Cancelled/failed inspections retain an incomplete-report marker.
+
+The DevTool's explicit removal action re-inspects the selected target and requires its complete
+path and fresh fingerprint. All candidates can be selected. References, tracked/untracked changes,
+conflicts, unfinished operations, locks, submodules, detached HEADs without local retention, missing
+registrations and unregistered directories are overridable only by a separate `force: true`
+confirmation. Primary/canonical repositories, protected roots, nested registered paths and identity
+changes remain hard blockers. An unpublished commit on a retained local branch is only a warning.
+Ignored paths still require a separate opt-in; ignored directories are summarized, not individually
+audited or fingerprinted.
+
+Ordinary removal uses `git worktree remove`; explicit force uses two force flags to include locked
+worktrees. Missing registrations are removed one at a time, never by bulk prune. Explicitly confirmed
+unregistered directories use recursive removal; leaf symlinks are unlinked without following them.
+Deletion verifies both directory and Git registration are absent and preserves branches. Detached
+HEAD commits are retained under `refs/cpl/removed-worktrees/` before force removal. Affected member
+records and matching managed symlinks are removed afterward; unexpected paths remain untouched.
+Metadata/cache cleanup failures after disk deletion are returned as successful deletion with a
+warning, not as a deletion to blindly retry. Deletion is permanent, not Trash-backed; stop concurrent
+editing/tasks before confirmation. This explicit Doctor action does not weaken ordinary Workspace
+member deletion's existing clean-worktree rules.
+
 ## Project Structure
 
 ```text
 src/types.ts             Public workspace contracts
 src/storage.ts           Workspace registry validation and atomic persistence
-src/workspaces.ts        Workspace lifecycle and filesystem/Git safety logic
+src/workspace-registry.ts Workspace creation/search, lookup and status persistence
+src/workspace-members.ts Member lifecycle and branch/reference conversion
+src/workspace-clone.ts    Selected-repository Workspace clone orchestration
+src/workspace-sync.ts     Rebase, push and batch branch synchronization
+src/workspace-maintenance.ts Link repair and legacy migration
+src/workspace-deletion.ts Workspace deletion preflight and transaction
+src/workspace-paths.ts    Shared link/path checks and rollback execution
+src/workspace-worktrees.ts Physical worktree operations and identity/cleanliness checks
 src/manager.ts           RepositoryManager integration and organize synchronization
 src/cli.ts               workspace/ws commands and query resolution
 src/terminal.ts          Combined repository/workspace interactive selectors
 src/storage.ts           manager and workspace configuration persistence
-tests/workspaces.test.ts Unit/integration lifecycle tests
+tests/workspaces.test.ts Core lifecycle regression tests
+tests/workspace-clone.test.ts Selected clone and rollback regression
+tests/workspace-branches-integration.test.ts Independent reference/development Git scenarios
+tests/workspace-migration.test.ts Dirty submodule migration regression
 tests/workspace-cli.test.ts CLI and interactive contract tests
 docs/workspaces-spec.md  Living feature specification
 ```
@@ -278,7 +326,7 @@ Required coverage:
 - link repair after repository organization;
 - removal never deletes canonical repositories;
 - dirty worktree removal and workspace deletion are rejected;
-- unexpected workspace files and links are preserved;
+- unexpected member files/links block removal; non-member files are deleted with the Workspace;
 - existing schema-version-1 config derives `workspaceRoot` safely;
 - interactive and non-interactive ambiguity behavior;
 - JSON stdout contains one value and diagnostics remain on stderr;
@@ -287,9 +335,9 @@ Required coverage:
 Verification commands:
 
 ```bash
-vp check src tests docs/workspaces-spec.md vite.config.ts
-vp test --run
-vp pack --dts --publint --attw
+pnpm run check
+pnpm run test tests/workspaces.test.ts tests/workspace-cli.test.ts
+pnpm run prepack
 npm pack --dry-run
 ```
 
@@ -315,7 +363,7 @@ Never:
 - duplicate repositories with an implicit `git clone`;
 - overwrite an occupied workspace member path;
 - remove a dirty worktree;
-- delete a canonical repository or unrelated workspace file;
+- delete a canonical repository, protected root, or nested registered Workspace;
 - store credentials in workspace metadata.
 
 ## Success Criteria
@@ -326,7 +374,8 @@ Never:
    work through both human-readable and JSON CLI modes.
 4. Direct `cpl` interaction can open either a repository or workspace through searchable selection.
 5. Organizing a repository repairs every managed link that references it.
-6. Dirty worktrees and unexpected filesystem entries block removal without losing data.
+6. Dirty worktrees and unexpected member paths block removal without losing data; successful Workspace
+   deletion removes its whole registered directory while preserving canonical repositories.
 7. Existing installations initialize workspace storage without losing or rewriting repository data.
 8. All verification commands pass, followed by a tarball-installed CLI smoke test using temporary
    repositories only.

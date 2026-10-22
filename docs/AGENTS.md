@@ -1,0 +1,22 @@
+# Documentation ownership
+
+These rules apply to `docs/`. The root [instructions](../AGENTS.md) apply repository-wide.
+
+| Home                                                                                                                  | Owns                                                                             | Update when                                                                        |
+| --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Root [AGENTS.md](../AGENTS.md)                                                                                        | Standing instructions and task routing                                           | The default Agent workflow changes                                                 |
+| [architecture.md](architecture.md)                                                                                    | Responsibility map and dependency direction                                      | Ownership or dependencies change                                                   |
+| [development.md](development.md)                                                                                      | Contributor steps, verification selection, reporting                             | Commands or validation requirements change                                         |
+| [workspaces-spec.md](workspaces-spec.md)                                                                              | Workspace storage, lifecycle, safety and CLI contracts                           | An owning contract changes                                                         |
+| [workspaces-plan.md](workspaces-plan.md)                                                                              | Completed original implementation plan                                           | Consult for history; current behavior belongs in the spec                          |
+| Root [README.md](../README.md) and [README.zh-CN.md](../README.zh-CN.md)                                              | English and Chinese user-facing commands and behavior                            | A documented product behavior changes; keep these existing counterparts consistent |
+| Frontend [README.md](../src/devtool-client/README.md)                                                                 | Browser structure, routes, state, styling and locale rules                       | Frontend responsibilities or conventions change                                    |
+| [Agent Notes](../.agents/notes/README.md)                                                                             | Rationale, alternatives, consequences and evidence                               | A decision meets that policy's triggers                                            |
+| Existing [Ant Design Skill](../.agents/skills/antd/SKILL.md)                                                          | Component lookup and validation workflow                                         | That reusable workflow changes                                                     |
+| [cpl-code-review](../.agents/skills/cpl-code-review/SKILL.md) and [cpl-verify](../.agents/skills/cpl-verify/SKILL.md) | Task-specific review and verification steps; linked docs retain policy ownership | The execution workflow changes                                                     |
+
+Give each fact one home and use relative Markdown links elsewhere. Document current behavior; retain historical rationale in decision records. New engineering documents need no translated counterpart. The existing paired user READMEs are the exception, not a repository-wide translation system.
+
+Before moving a document, search its inbound references. Repair links in the same change. Examples must use real scripts and synthetic paths; mark future behavior as proposed. Resolve contradictions against the owning code and its behavior tests, recording any material decision rather than silently weakening a safety guarantee.
+
+Run `pnpm run check:docs` after changing guidance. Its deliberately limited scope and checks are described in [development](development.md#validation); editorial review still checks duplication, scope and factual accuracy.

@@ -16,6 +16,8 @@ export interface StoragePaths {
   registry: string;
   workspaces: string;
   workspaceStatuses: string;
+  worktreeAudit: string;
+  worktreeAuditIgnores: string;
 }
 
 export function createStoragePaths(dataDir: string): StoragePaths {
@@ -24,6 +26,8 @@ export function createStoragePaths(dataDir: string): StoragePaths {
     registry: join(dataDir, "repositories.json"),
     workspaces: join(dataDir, "workspaces.json"),
     workspaceStatuses: join(dataDir, "workspace-statuses.json"),
+    worktreeAudit: join(dataDir, "worktree-audit.json"),
+    worktreeAuditIgnores: join(dataDir, "worktree-audit-ignores.json"),
   };
 }
 

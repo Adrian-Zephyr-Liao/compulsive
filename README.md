@@ -60,6 +60,45 @@ cpl doctor
 Run `cpl` without a command in an interactive terminal to open a searchable repository and
 Workspace picker.
 
+### Worktree audit
+
+Use **System settings → Environment diagnostics → Worktree audit**, or run:
+
+```bash
+cpl doctor worktrees
+cpl doctor worktrees --all --json
+```
+
+The audit compares CPL requirement references, Git's linked-worktree registrations, and immediate
+children of managed repositories' `.worktrees` directories. It excludes primary checkouts and
+distinguishes referenced, unreferenced, external, missing, and unregistered paths. Details include
+tracked/untracked/ignored files, conflicts, unfinished Git operations, locks, HEAD, and unpublished
+commits based on **cached remote refs**. No fetch, deletion, or prune is performed. An unreferenced
+or clean worktree is **not** proof that it is disposable; a missing path can be moved or offline.
+
+Scans are manual and cancellable. Incomplete reports retain errors and never imply a healthy scan.
+Reports and fingerprint-based ignore choices are stored beside CPL's `config.json`, in
+`worktree-audit.json` and `worktree-audit-ignores.json`, not in browser storage. Ignored findings
+resurface after relevant changes on a subsequent scan. The UI supports details, VS Code opening
+for registered directories, and local JSON export (which includes local paths and file names).
+The existing `cpl doctor --json` check-array format is unchanged.
+
+To remove a reviewed worktree, choose **Delete worktree** in the audit table. CPL checks its live
+state again and requires the complete path as confirmation. Every candidate can open this preview.
+Dirty, conflicted, locked, referenced or unfinished worktrees, submodules, missing registrations and
+unregistered directories require an additional **Force delete** confirmation. Git registrations are
+removed individually; no bulk prune is used. Unregistered directories are recursively removed only
+after this explicit confirmation, and symlinks are unlinked without following their targets.
+Primary/canonical repositories, protected roots and changed identities remain non-overridable.
+
+Local branches are retained. Detached HEAD commits receive a recovery ref under
+`refs/cpl/removed-worktrees/` before force removal; create a branch from the displayed ref to recover
+the commit. Affected requirement memberships and managed symlinks are cleaned after deletion.
+Ignored files/directories require their own opt-in (they may contain local configuration or secrets);
+ignored directories are summarized, not audited file by file. Force deletion permanently discards
+uncommitted/untracked data and unfinished operations, without Trash. Stop editors/tasks in the target
+before confirming. Ordinary requirement-member deletion keeps its existing clean-worktree checks.
+
 Open the local Workspace DevTool to create Workspaces, add only the repositories a task needs,
 sync worktrees, and copy the resulting `cd` command:
 
@@ -257,6 +296,8 @@ throw `CompulsiveError`, whose `code` is stable and machine-readable.
 - `forget`, Workspace removal, and repository organization never delete canonical repositories.
 
 ## Development
+
+Start with [AGENTS.md](./AGENTS.md) and the [development workflow](./docs/development.md) for architecture, decision records, and change-specific validation.
 
 Compulsive uses [Vite+](https://viteplus.dev/):
 

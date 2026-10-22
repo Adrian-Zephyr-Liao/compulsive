@@ -54,9 +54,11 @@
     "build:devtool": "vp build --config vite.devtool.config.ts",
     "dev": "vp pack --watch",
     "test": "vp test --run",
-    "check": "vp check",
+    "check": "pnpm run check:docs && pnpm run check:architecture && vp check",
+    "check:docs": "node scripts/check-agent-docs.mjs",
+    "check:architecture": "node scripts/check-architecture.mjs",
     "prepack": "vp pack --publint --attw && pnpm run build:devtool",
-    "prepublishOnly": "vp check && vp test --run"
+    "prepublishOnly": "pnpm run check && vp test --run"
   },
   "dependencies": {
     "@clack/prompts": "^1.7.0",

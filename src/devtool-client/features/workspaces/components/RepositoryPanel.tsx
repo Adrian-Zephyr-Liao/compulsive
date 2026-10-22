@@ -28,21 +28,16 @@ import type { TableProps } from "antd";
 
 import { useI18n } from "../../../app/i18n.js";
 import type { WorkspaceMember, WorkspaceStatusResult } from "../../../../types.js";
+import type {
+  RepositoryStatusCounts,
+  WorkspaceFeedbackState as WorkspaceFeedback,
+} from "../types.js";
+export type {
+  RepositoryStatusCounts,
+  WorkspaceFeedbackState as WorkspaceFeedback,
+} from "../types.js";
 
 const { Text, Title } = Typography;
-
-export interface RepositoryStatusCounts {
-  all: number;
-  attention: number;
-  conflicts: number;
-  unpushed: number;
-}
-
-export interface WorkspaceFeedback {
-  error: boolean;
-  message: string;
-  title: string;
-}
 
 export interface RepositoryPanelProps {
   busy: boolean;

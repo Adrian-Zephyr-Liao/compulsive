@@ -4,6 +4,16 @@ export { parseGitRemote } from "./git-url.js";
 export { createRepositoryManager } from "./manager.js";
 export { formatCdCommand, quoteZsh } from "./shell.js";
 export type {
+  WorktreeAuditItem,
+  WorktreeAuditReport,
+  WorktreeAuditOptions,
+  WorktreeAuditJob,
+  WorktreeCategory,
+  WorktreeRemovalPlan,
+  WorktreeRemovalInput,
+  WorktreeRemovalResult,
+} from "./worktree-audit-types.js";
+export type {
   AddWorkspaceMemberInput,
   CloneRepositoryInput,
   CreateWorkspaceInput,

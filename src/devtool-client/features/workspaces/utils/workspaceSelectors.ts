@@ -19,6 +19,59 @@ export function statusFor(
   return status?.members.find((item) => item.repositoryId === member.repositoryId);
 }
 
+function needsAttention(status: WorkspaceMemberStatus | undefined): boolean {
+  return Boolean(
+    status?.changes.length ||
+    status?.conflicts.length ||
+    status?.behind ||
+    status?.unpushed ||
+    status?.comparisonError,
+  );
+}
+
+export function filterWorkspaceMembers(
+  members: WorkspaceMember[],
+  repositories: RepositoryRecord[],
+  status: WorkspaceStatusResult | undefined,
+  filters: { query: string; mode: string; state: string },
+): WorkspaceMember[] {
+  const query = filters.query.trim().toLowerCase();
+  return members.filter((member) => {
+    const observation = statusFor(status, member);
+    const mode = member.mode === "worktree" && member.detached ? "reference" : member.mode;
+    const stateMatches =
+      filters.state === "all" ||
+      (filters.state === "attention" && needsAttention(observation)) ||
+      (filters.state === "unpushed" && Boolean(observation?.unpushed)) ||
+      (filters.state === "conflicts" && Boolean(observation?.conflicts.length));
+    return (
+      (filters.mode === "all" || mode === filters.mode) &&
+      stateMatches &&
+      [
+        member.alias,
+        repositoryFor(repositories, member)?.classificationPath ?? "",
+        observation?.branch ?? "",
+      ].some((value) => value.toLowerCase().includes(query))
+    );
+  });
+}
+
+export function countWorkspaceStatuses(
+  members: WorkspaceMember[],
+  status: WorkspaceStatusResult | undefined,
+) {
+  const ids = new Set(members.map((member) => member.repositoryId));
+  const observations = (status?.members ?? []).filter((observation) =>
+    ids.has(observation.repositoryId),
+  );
+  return {
+    all: members.length,
+    attention: observations.filter(needsAttention).length,
+    unpushed: observations.filter((observation) => observation.unpushed).length,
+    conflicts: observations.filter((observation) => observation.conflicts.length).length,
+  };
+}
+
 export function isTaskComplete(status: WorkspaceMemberStatus | undefined): boolean {
   return Boolean(
     status?.mergedIntoDefault &&

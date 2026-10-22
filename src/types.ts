@@ -1,3 +1,11 @@
+import type {
+  WorktreeAuditOptions,
+  WorktreeAuditReport,
+  WorktreeRemovalPlan,
+  WorktreeRemovalInput,
+  WorktreeRemovalResult,
+} from "./worktree-audit-types.js";
+
 export type RepositoryId = string & { readonly __brand: "RepositoryId" };
 export type RepositoryKind = "remote" | "local";
 export type WorkspaceId = string & { readonly __brand: "WorkspaceId" };
@@ -257,6 +265,15 @@ export interface RepositoryManager {
   getConfig(): Promise<ManagerConfig>;
   updateConfig(input: UpdateConfigInput): Promise<ManagerConfig>;
   doctor(): Promise<DoctorCheck[]>;
+  auditWorktrees(options?: WorktreeAuditOptions): Promise<WorktreeAuditReport>;
+  getWorktreeAudit(): Promise<WorktreeAuditReport | null>;
+  previewWorktreeRemoval(id: string): Promise<WorktreeRemovalPlan>;
+  removeAuditedWorktree(input: WorktreeRemovalInput): Promise<WorktreeRemovalResult>;
+  setWorktreeAuditIgnored(
+    id: string,
+    fingerprint: string,
+    ignored: boolean,
+  ): Promise<WorktreeAuditReport>;
   clone(input: CloneRepositoryInput): Promise<RepositoryRecord>;
   discover(input?: DiscoverRepositoriesInput): Promise<DiscoveryResult>;
   register(input: RegisterRepositoryInput): Promise<RepositoryRecord>;

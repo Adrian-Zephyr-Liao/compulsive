@@ -7,6 +7,27 @@ export type ConnectionState = "connecting" | "connected" | "reconnecting" | "fai
 export type WorkspaceRpc = DevframeScopedClientRpc<"compulsive">;
 export type WorktreeMember = Extract<WorkspaceMember, { mode: "worktree" }>;
 
+export interface WorkspaceFeedbackState {
+  title: string;
+  message: string;
+  error: boolean;
+}
+
+export interface RepositoryStatusCounts {
+  all: number;
+  attention: number;
+  conflicts: number;
+  unpushed: number;
+}
+
+export type RunWorkspaceAction = (
+  name: string,
+  task: () => Promise<unknown>,
+  success: string,
+  preferredWorkspaceId?: string,
+  refreshStatus?: boolean,
+) => Promise<boolean>;
+
 export interface ConfirmState {
   title: string;
   message: string;

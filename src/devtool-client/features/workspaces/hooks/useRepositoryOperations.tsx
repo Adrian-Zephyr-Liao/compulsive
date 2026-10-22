@@ -10,24 +10,16 @@ import type {
   WorkspaceMember,
   WorkspaceStatusResult,
 } from "../../../../types.js";
-import type { WorkspaceRpc } from "../types.js";
+import type { WorkspaceRpc, RunWorkspaceAction } from "../types.js";
 import { describeError } from "../utils/errors.js";
 import { repositoryFor, statusFor } from "../utils/workspaceSelectors.js";
 
 const { Text } = Typography;
 
-type RunAction = (
-  name: string,
-  task: () => Promise<unknown>,
-  success: string,
-  preferredWorkspaceId?: string,
-  refreshStatus?: boolean,
-) => Promise<boolean>;
-
 interface RepositoryOperationsOptions {
   getRpc: () => Promise<WorkspaceRpc>;
   repositories: RepositoryRecord[];
-  runAction: RunAction;
+  runAction: RunWorkspaceAction;
   selectedWorkspaceIdRef: RefObject<string | undefined>;
   status: WorkspaceStatusResult | undefined;
   refreshStatus: (fetchRemote?: boolean) => Promise<void>;

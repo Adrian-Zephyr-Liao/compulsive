@@ -5,12 +5,11 @@ import { useLocation, useMatch, useNavigate } from "react-router";
 
 import { useI18n } from "../../app/i18n.js";
 import { DevtoolRoutes, routePaths } from "../../app/routes.js";
-import type { DevtoolState, DevtoolWorkspace } from "../../../devtool.js";
-import type { DoctorCheck, ManagerConfig, WorkspaceMember } from "../../../types.js";
+import type { DevtoolState } from "../../../devtool.js";
+import type { WorkspaceMember } from "../../../types.js";
 import { SystemSettingsPage } from "../settings/SystemSettingsPage.js";
 import { RequirementPage } from "./RequirementPage.js";
 import { RepositoryDetailDrawer } from "./components/RepositoryDetailDrawer.js";
-import type { RepositoryStatusCounts } from "./components/RepositoryPanel.js";
 import {
   createRepositoryTableColumns,
   type RepositoryAction,
@@ -26,11 +25,13 @@ import { useRepositoryOperations } from "./hooks/useRepositoryOperations.js";
 import { useRequirementDraft } from "./hooks/useRequirementDraft.js";
 import { useWorkspaceConnection } from "./hooks/useWorkspaceConnection.js";
 import { useWorkspaceStatus } from "./hooks/useWorkspaceStatus.js";
-import type { ConfirmState, WorktreeMember } from "./types.js";
-import { describeError } from "./utils/errors.js";
+import type { WorkspaceFeedbackState } from "./types.js";
+import { useWorkspaceActions } from "./hooks/useWorkspaceActions.js";
+import { useMemberDialogs } from "./hooks/useMemberDialogs.js";
 import {
   isNonDefaultBranch as selectIsNonDefaultBranch,
-  repositoryFor as selectRepositoryFor,
+  filterWorkspaceMembers,
+  countWorkspaceStatuses,
   statusFor as selectStatusFor,
 } from "./utils/workspaceSelectors.js";
 
@@ -45,7 +46,7 @@ const { Content, Footer } = Layout;
 const { Text } = Typography;
 
 export default function WorkspaceApp() {
-  const { message, modal, notification } = AntApp.useApp();
+  const { message } = AntApp.useApp();
   const { t } = useI18n();
   const location = useLocation();
   const navigate = useNavigate();
@@ -59,24 +60,9 @@ export default function WorkspaceApp() {
   const [repositoryQuery, setRepositoryQuery] = useState("");
   const [repositoryMode, setRepositoryMode] = useState("all");
   const [repositoryState, setRepositoryState] = useState("all");
-  const [showAdd, setShowAdd] = useState(false);
-  const [selectedRepositoryId, setSelectedRepositoryId] = useState("");
-  const [alias, setAlias] = useState("");
-  const [branch, setBranch] = useState("");
   const [busyAction, setBusyAction] = useState("");
-  const [feedback, setFeedback] = useState<{
-    title: string;
-    message: string;
-    error: boolean;
-  }>();
+  const [feedback, setFeedback] = useState<WorkspaceFeedbackState>();
 
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [promoteOpen, setPromoteOpen] = useState(false);
-  const [promoteMember, setPromoteMember] = useState<WorktreeMember>();
-  const [promoteBranch, setPromoteBranch] = useState("");
-  const [promoteError, setPromoteError] = useState("");
-  const [confirmState, setConfirmState] = useState<ConfirmState>();
-  const [confirmAcknowledged, setConfirmAcknowledged] = useState(false);
   const [detailMember, setDetailMember] = useState<WorkspaceMember>();
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -132,78 +118,73 @@ export default function WorkspaceApp() {
     workspaces: state.workspaces,
     onResetBranches: resetRepositoryBranches,
   });
+  const availableRepositories = useMemo(() => {
+    const memberIds = new Set(currentWorkspace?.members.map((member) => member.repositoryId));
+    return state.repositories.filter((repository) => !memberIds.has(repository.id));
+  }, [currentWorkspace, state.repositories]);
+  const {
+    saveConfig,
+    runDoctor,
+    runAction,
+    copyCommand,
+    syncWorkspace,
+    confirmWorkspaceBranchSync,
+    submitRequirement,
+  } = useWorkspaceActions({
+    busy,
+    getRpc,
+    refresh,
+    refreshWorkspaceStatus,
+    workspaceStatus,
+    selectedWorkspaceIdRef,
+    setBusyAction,
+    setFeedback,
+    setRepositoryState,
+  });
+  const memberDialogs = useMemberDialogs({
+    busy,
+    currentWorkspace,
+    availableRepositories,
+    getRpc,
+    runAction,
+    loadRepositoryBranchOptions,
+    feedback,
+  });
   const filteredWorkspaces = useMemo(() => {
     const query = workspaceQuery.trim().toLowerCase();
     return state.workspaces.filter((workspace) =>
       [workspace.name, workspace.absolutePath].some((value) => value.toLowerCase().includes(query)),
     );
   }, [state.workspaces, workspaceQuery]);
-  const availableRepositories = useMemo(() => {
-    const memberIds = new Set(currentWorkspace?.members.map((member) => member.repositoryId));
-    return state.repositories.filter((repository) => !memberIds.has(repository.id));
-  }, [currentWorkspace, state.repositories]);
-  const filteredMembers = useMemo(() => {
-    const query = repositoryQuery.trim().toLowerCase();
-    return (currentWorkspace?.members ?? []).filter((member) => {
-      const status = statusFor(member);
-      const mode = member.mode === "worktree" && member.detached ? "reference" : member.mode;
-      const stateMatches =
-        repositoryState === "all" ||
-        (repositoryState === "attention" &&
-          Boolean(
-            status?.changes.length ||
-            status?.conflicts.length ||
-            status?.behind ||
-            status?.unpushed ||
-            status?.comparisonError,
-          )) ||
-        (repositoryState === "unpushed" && Boolean(status?.unpushed)) ||
-        (repositoryState === "conflicts" && Boolean(status?.conflicts.length));
-      return (
-        (repositoryMode === "all" || mode === repositoryMode) &&
-        stateMatches &&
-        [member.alias, repositoryFor(member)?.classificationPath ?? "", status?.branch ?? ""].some(
-          (value) => value.toLowerCase().includes(query),
-        )
-      );
-    });
-  }, [
-    currentWorkspace,
-    repositoryMode,
-    repositoryQuery,
-    repositoryState,
-    state.repositories,
-    workspaceStatus,
-  ]);
-  const repositoryStatusCounts = useMemo<RepositoryStatusCounts>(() => {
-    const memberIds = new Set(currentWorkspace?.members.map((member) => member.repositoryId));
-    const statuses = (workspaceStatus?.members ?? []).filter((status) =>
-      memberIds.has(status.repositoryId),
-    );
-    return {
-      all: currentWorkspace?.members.length ?? 0,
-      attention: statuses.filter((status) =>
-        Boolean(
-          status.changes.length ||
-          status.conflicts.length ||
-          status.behind ||
-          status.unpushed ||
-          status.comparisonError,
-        ),
-      ).length,
-      unpushed: statuses.filter((status) => status.unpushed).length,
-      conflicts: statuses.filter((status) => status.conflicts.length).length,
-    };
-  }, [currentWorkspace, workspaceStatus]);
+  const filteredMembers = useMemo(
+    () =>
+      filterWorkspaceMembers(currentWorkspace?.members ?? [], state.repositories, workspaceStatus, {
+        query: repositoryQuery,
+        mode: repositoryMode,
+        state: repositoryState,
+      }),
+    [
+      currentWorkspace,
+      repositoryMode,
+      repositoryQuery,
+      repositoryState,
+      state.repositories,
+      workspaceStatus,
+    ],
+  );
+  const repositoryStatusCounts = useMemo(
+    () => countWorkspaceStatuses(currentWorkspace?.members ?? [], workspaceStatus),
+    [currentWorkspace, workspaceStatus],
+  );
 
   useEffect(() => {
     selectedWorkspaceIdRef.current = selectedWorkspaceId;
-    setShowAdd(false);
-    setAlias("");
-    setBranch("");
+    memberDialogs.setShowAdd(false);
+    memberDialogs.setAlias("");
+    memberDialogs.setBranch("");
     setDetailMember(undefined);
-    setPromoteOpen(false);
-    setConfirmOpen(false);
+    memberDialogs.setPromoteOpen(false);
+    memberDialogs.setConfirmOpen(false);
   }, [selectedWorkspaceId, settingsSelected]);
 
   useEffect(() => {
@@ -211,14 +192,14 @@ export default function WorkspaceApp() {
   }, [location.pathname]);
 
   useEffect(() => {
-    if (!availableRepositories.some((repository) => repository.id === selectedRepositoryId)) {
-      setSelectedRepositoryId(availableRepositories[0]?.id ?? "");
+    if (
+      !availableRepositories.some(
+        (repository) => repository.id === memberDialogs.selectedRepositoryId,
+      )
+    ) {
+      memberDialogs.setSelectedRepositoryId(availableRepositories[0]?.id ?? "");
     }
-  }, [availableRepositories, selectedRepositoryId]);
-
-  function repositoryFor(member: WorkspaceMember) {
-    return selectRepositoryFor(state.repositories, member);
-  }
+  }, [availableRepositories, memberDialogs.selectedRepositoryId]);
 
   function statusFor(member: WorkspaceMember) {
     return selectStatusFor(workspaceStatus, member);
@@ -241,75 +222,6 @@ export default function WorkspaceApp() {
     }
   }
 
-  async function saveConfig(
-    config: Pick<ManagerConfig, "rootDir" | "workspaceRoot" | "scanRoots">,
-  ) {
-    setBusyAction(t("settings.saving"));
-    try {
-      const rpc = await getRpc();
-      await rpc.call("update-config", config);
-      await refresh();
-      void message.success(t("settings.saved"));
-    } catch (error) {
-      notification.error({
-        title: t("settings.saveFailed"),
-        description: describeError(error),
-      });
-      throw error;
-    } finally {
-      setBusyAction("");
-    }
-  }
-
-  async function runDoctor(): Promise<DoctorCheck[]> {
-    try {
-      const rpc = await getRpc();
-      return (await rpc.call("run-doctor")).checks;
-    } catch (error) {
-      notification.error({
-        title: t("doctor.runFailed"),
-        description: describeError(error),
-      });
-      throw error;
-    }
-  }
-
-  async function runAction(
-    name: string,
-    task: () => Promise<unknown>,
-    success: string,
-    preferredWorkspaceId?: string,
-    refreshStatus = true,
-  ): Promise<boolean> {
-    if (busy) return false;
-    const checkedWorkspaceId = workspaceStatus?.workspaceId;
-    setBusyAction(name);
-    try {
-      await task();
-      await refresh(preferredWorkspaceId);
-      if (refreshStatus && checkedWorkspaceId === selectedWorkspaceIdRef.current) {
-        await refreshWorkspaceStatus(false);
-      }
-      setFeedback(undefined);
-      void message.success(success);
-      return true;
-    } catch (error) {
-      if (refreshStatus && checkedWorkspaceId === selectedWorkspaceIdRef.current) {
-        await refreshWorkspaceStatus(false);
-      }
-      setFeedback(undefined);
-      notification.error({
-        title: t("feedback.actionFailed", { action: name }),
-        description: describeError(error),
-        duration: 8,
-        placement: "topRight",
-      });
-      return false;
-    } finally {
-      setBusyAction("");
-    }
-  }
-
   const repositoryOperations = useRepositoryOperations({
     getRpc,
     repositories: state.repositories,
@@ -318,286 +230,6 @@ export default function WorkspaceApp() {
     status: workspaceStatus,
     refreshStatus: refreshWorkspaceStatus,
   });
-
-  async function copyCommand(workspace: DevtoolWorkspace): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(workspace.cdCommand);
-      setFeedback(undefined);
-      void message.success(t("feedback.commandCopied"));
-    } catch (error) {
-      setFeedback({ title: t("feedback.copyFailed"), message: describeError(error), error: true });
-    }
-  }
-
-  async function syncWorkspace(workspace: DevtoolWorkspace): Promise<void> {
-    const rpc = await getRpc();
-    await runAction(
-      t("feedback.syncRequirement"),
-      () => rpc.call("sync-workspace", { workspaceId: workspace.id }),
-      t("feedback.requirementSynced"),
-      workspace.id,
-    );
-  }
-
-  async function syncWorkspaceBranches(workspace: DevtoolWorkspace): Promise<void> {
-    if (busy) return;
-    const rpc = await getRpc();
-    setBusyAction(t("feedback.batchSync"));
-    try {
-      const result = await rpc.call("sync-workspace-branches", { workspaceId: workspace.id });
-      await refreshWorkspaceStatus(true);
-      const count = (outcome: (typeof result.items)[number]["outcome"]) =>
-        result.items.filter((item) => item.outcome === outcome).length;
-      const synced = count("synced");
-      const skipped = count("skipped");
-      const conflicts = count("conflict");
-      const failed = count("failed");
-      const issues = result.items.filter(
-        (item) => item.outcome === "failed" || item.outcome === "conflict",
-      );
-      if (conflicts) setRepositoryState("conflicts");
-      setFeedback(undefined);
-      const options = {
-        title: failed
-          ? t("feedback.repositoriesFailed", { count: failed })
-          : conflicts
-            ? t("feedback.repositoriesConflicted", { count: conflicts })
-            : t("feedback.batchComplete"),
-        description: (
-          <div className="grid gap-2">
-            <Text type="secondary">
-              {t("feedback.batchSummary", { synced, skipped, conflicts, failed })}
-            </Text>
-            {issues.length > 0 && (
-              <ul className="m-0 grid max-h-52 gap-1 overflow-auto pl-5">
-                {issues.map((item) => (
-                  <li key={item.repositoryId}>
-                    <Text strong>{item.alias}</Text>
-                    <Text type="secondary">: {item.message}</Text>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        ),
-        duration: issues.length ? 0 : 8,
-        placement: "topRight" as const,
-      };
-      if (failed) notification.error(options);
-      else if (conflicts) notification.warning(options);
-      else notification.success(options);
-    } catch (error) {
-      notification.error({
-        title: t("feedback.batchFailed"),
-        description: describeError(error),
-        duration: 8,
-        placement: "topRight",
-      });
-    } finally {
-      setBusyAction("");
-    }
-  }
-
-  function confirmWorkspaceBranchSync(workspace: DevtoolWorkspace): void {
-    modal.confirm({
-      centered: true,
-      title: t("feedback.batchTitle"),
-      content: (
-        <div className="grid gap-2 text-sm">
-          <Text>{t("feedback.batchIntro")}</Text>
-          <ul className="m-0 grid gap-1 pl-5 text-[var(--ant-color-text-secondary)]">
-            <li>{t("feedback.batchRuleDevelopment")}</li>
-            <li>{t("feedback.batchRuleReference")}</li>
-            <li>{t("feedback.batchRuleSkip")}</li>
-          </ul>
-        </div>
-      ),
-      okText: t("feedback.startSync"),
-      cancelText: t("common.cancel"),
-      onOk: () => syncWorkspaceBranches(workspace),
-    });
-  }
-
-  function openPromoteReference(workspace: DevtoolWorkspace, member: WorktreeMember): void {
-    setPromoteMember(member);
-    setPromoteBranch(
-      member.detached ? `workspace/${workspace.name}/${member.alias}` : member.branch,
-    );
-    setPromoteError("");
-    setPromoteOpen(true);
-    void loadRepositoryBranchOptions(member.repositoryId, true);
-  }
-
-  async function submitPromoteReference(): Promise<void> {
-    const workspace = currentWorkspace;
-    const member = promoteMember;
-    const nextBranch = promoteBranch.trim();
-    if (!workspace || !member || !nextBranch || busy) return;
-    const rpc = await getRpc();
-    setPromoteError("");
-    const succeeded = await runAction(
-      member.detached ? t("action.promote") : t("action.switchBranch"),
-      () =>
-        rpc.call("switch-workspace-member-branch", {
-          workspaceId: workspace.id,
-          repositoryId: member.repositoryId,
-          branch: nextBranch,
-        }),
-      member.detached
-        ? `${t("action.promote")}: ${member.alias}`
-        : `${t("action.switchBranch")}: ${member.alias}`,
-      workspace.id,
-    );
-    if (succeeded) setPromoteOpen(false);
-    else setPromoteError(feedback?.message ?? t("feedback.promoteFailed"));
-  }
-
-  async function addMember(workspace: DevtoolWorkspace): Promise<void> {
-    const repository = availableRepositories.find((item) => item.id === selectedRepositoryId);
-    if (!repository) return;
-    const rpc = await getRpc();
-    const succeeded = await runAction(
-      t("feedback.addRepository"),
-      () =>
-        rpc.call("add-workspace-member", {
-          workspaceId: workspace.id,
-          repositoryId: repository.id,
-          ...(alias.trim() ? { alias: alias.trim() } : {}),
-          ...(branch.trim() ? { branch: branch.trim() } : {}),
-          createBranch: true,
-        }),
-      `${t("common.add")}: ${repository.name}`,
-      workspace.id,
-    );
-    if (succeeded) setShowAdd(false);
-  }
-
-  async function submitClone(): Promise<void> {
-    if (!requirement.canSubmit) return;
-    const rpc = await getRpc();
-    requirement.setError("");
-    const action = requirement.mode === "clone" ? t("requirement.clone") : t("requirement.create");
-    setBusyAction(action);
-    try {
-      const name = requirement.targetName.trim();
-      const workspace = requirement.selectedIds.length
-        ? await rpc.call("clone-workspace", {
-            ...(requirement.mode === "clone" ? { sourceWorkspaceId: requirement.sourceId } : {}),
-            name,
-            repositoryIds: requirement.selectedIds,
-            repositoryBranches: requirement.developmentIds.map((repositoryId) => ({
-              repositoryId,
-              branch: requirement.repositoryBranches[repositoryId]!.trim(),
-            })),
-            referenceRepositoryIds: requirement.referenceIds,
-          })
-        : await rpc.call("create-workspace", { name });
-      await refresh(workspace.id);
-      setFeedback(undefined);
-      void message.success(
-        t(
-          requirement.mode === "clone"
-            ? "feedback.requirementCloned"
-            : "feedback.requirementCreated",
-          {
-            development: requirement.developmentCount,
-            reference: requirement.referenceIds.length,
-          },
-        ),
-      );
-      requirement.close();
-    } catch (error) {
-      const errorMessage = describeError(error);
-      requirement.setError(errorMessage);
-      setFeedback({
-        title:
-          requirement.mode === "clone"
-            ? t("requirement.cloneFailed")
-            : t("requirement.createFailed"),
-        message: errorMessage,
-        error: true,
-      });
-    } finally {
-      setBusyAction("");
-    }
-  }
-
-  function openDeleteWorkspace(workspace: DevtoolWorkspace): void {
-    setConfirmAcknowledged(false);
-    setConfirmState({
-      title: t("confirm.deleteTitle", { name: workspace.name }),
-      message: t("confirm.deleteMessage"),
-      warning: t("confirm.deleteWarning"),
-      confirmLabel: t("confirm.permanentDelete"),
-      action: "delete-workspace",
-      workspace,
-    });
-    setConfirmOpen(true);
-  }
-
-  function openRemoveMember(workspace: DevtoolWorkspace, member: WorkspaceMember): void {
-    setConfirmAcknowledged(true);
-    setConfirmState({
-      title: t("confirm.removeTitle", { name: member.alias }),
-      message: t("confirm.removeMessage", { workspace: workspace.name }),
-      action: "remove-member",
-      workspace,
-      member,
-    });
-    setConfirmOpen(true);
-  }
-
-  function openConvertToReference(workspace: DevtoolWorkspace, member: WorktreeMember): void {
-    setConfirmAcknowledged(true);
-    setConfirmState({
-      title: t("confirm.referenceTitle", { name: member.alias }),
-      message: t("confirm.referenceMessage", { branch: member.branch }),
-      warning: t("confirm.referenceWarning"),
-      confirmLabel: t("action.toReference"),
-      action: "convert-to-reference",
-      workspace,
-      member,
-    });
-    setConfirmOpen(true);
-  }
-
-  async function confirmAction(): Promise<void> {
-    const pending = confirmState;
-    if (!pending || busy) return;
-    setConfirmOpen(false);
-    const rpc = await getRpc();
-    if (pending.action === "delete-workspace") {
-      await runAction(
-        t("feedback.deleteRequirement"),
-        () => rpc.call("delete-workspace", { workspaceId: pending.workspace.id }),
-        `${t("feedback.deleteRequirement")}: ${pending.workspace.name}`,
-      );
-      return;
-    }
-    if (pending.action === "convert-to-reference") {
-      await runAction(
-        t("feedback.toReference"),
-        () =>
-          rpc.call("convert-workspace-to-reference", {
-            workspaceId: pending.workspace.id,
-            repositoryId: pending.member!.repositoryId,
-          }),
-        `${t("feedback.toReference")}: ${pending.member!.alias}`,
-        pending.workspace.id,
-      );
-      return;
-    }
-    await runAction(
-      t("feedback.removeRepository"),
-      () =>
-        rpc.call("remove-workspace-member", {
-          workspaceId: pending.workspace.id,
-          repositoryId: pending.member!.repositoryId,
-        }),
-      `${t("feedback.removeRepository")}: ${pending.member!.alias}`,
-      pending.workspace.id,
-    );
-  }
 
   const columns = createRepositoryTableColumns({
     busy,
@@ -612,9 +244,11 @@ export default function WorkspaceApp() {
       if (action === "open") void repositoryOperations.openInVscode(currentWorkspace, member);
       if (action === "rebase") void repositoryOperations.rebase(currentWorkspace, member);
       if (action === "push") repositoryOperations.push(currentWorkspace, member);
-      if (action === "switch" && worktree) openPromoteReference(currentWorkspace, worktree);
-      if (action === "reference" && worktree) openConvertToReference(currentWorkspace, worktree);
-      if (action === "remove") openRemoveMember(currentWorkspace, member);
+      if (action === "switch" && worktree)
+        memberDialogs.openPromoteReference(currentWorkspace, worktree);
+      if (action === "reference" && worktree)
+        memberDialogs.openConvertToReference(currentWorkspace, worktree);
+      if (action === "remove") memberDialogs.openRemoveMember(currentWorkspace, member);
     },
   });
 
@@ -693,10 +327,12 @@ export default function WorkspaceApp() {
                 requirementExists={Boolean(currentWorkspace)}
                 settings={
                   <SystemSettingsPage
+                    getRpc={getRpc}
                     config={state.config}
                     disabled={busy}
                     saving={busyAction === t("settings.saving")}
                     onRunDoctor={runDoctor}
+                    onWorktreeRemoved={refresh}
                     onSave={saveConfig}
                   />
                 }
@@ -720,7 +356,7 @@ export default function WorkspaceApp() {
                             : t("workspace.cachedStatus")
                           : t("repository.notChecked"),
                         onClone: requirement.openClone,
-                        onDelete: () => openDeleteWorkspace(currentWorkspace),
+                        onDelete: () => memberDialogs.openDeleteWorkspace(currentWorkspace),
                       }}
                       repositories={{
                         busy,
@@ -736,11 +372,14 @@ export default function WorkspaceApp() {
                         statusCounts: repositoryStatusCounts,
                         statusLoading,
                         onAddRepository: () => {
-                          setAlias("");
-                          setBranch("");
-                          setShowAdd(true);
-                          if (selectedRepositoryId)
-                            void loadRepositoryBranchOptions(selectedRepositoryId, true);
+                          memberDialogs.setAlias("");
+                          memberDialogs.setBranch("");
+                          memberDialogs.setShowAdd(true);
+                          if (memberDialogs.selectedRepositoryId)
+                            void loadRepositoryBranchOptions(
+                              memberDialogs.selectedRepositoryId,
+                              true,
+                            );
                         },
                         onBatchSync: () => confirmWorkspaceBranchSync(currentWorkspace),
                         onCheckStatus: () => void refreshWorkspaceStatus(),
@@ -802,46 +441,53 @@ export default function WorkspaceApp() {
       />
 
       <AddRepositoryDialog
-        alias={alias}
-        branch={branch}
-        branches={repositoryBranchOptions[selectedRepositoryId] ?? []}
-        branchLoading={branchLoadingIds.includes(selectedRepositoryId)}
+        alias={memberDialogs.alias}
+        branch={memberDialogs.branch}
+        branches={repositoryBranchOptions[memberDialogs.selectedRepositoryId] ?? []}
+        branchLoading={branchLoadingIds.includes(memberDialogs.selectedRepositoryId)}
         busy={busy}
-        open={showAdd}
+        open={memberDialogs.showAdd}
         repositories={availableRepositories}
-        selectedRepositoryId={selectedRepositoryId}
+        selectedRepositoryId={memberDialogs.selectedRepositoryId}
         submitting={busyAction === t("feedback.addRepository")}
-        onAliasChange={setAlias}
-        onBranchChange={setBranch}
-        onClose={() => setShowAdd(false)}
+        onAliasChange={memberDialogs.setAlias}
+        onBranchChange={memberDialogs.setBranch}
+        onClose={() => memberDialogs.setShowAdd(false)}
         onLoadBranches={() => {
-          if (selectedRepositoryId) void loadRepositoryBranchOptions(selectedRepositoryId);
+          if (memberDialogs.selectedRepositoryId)
+            void loadRepositoryBranchOptions(memberDialogs.selectedRepositoryId);
         }}
         onRepositoryChange={(repositoryId) => {
-          setSelectedRepositoryId(repositoryId);
-          setBranch("");
+          memberDialogs.setSelectedRepositoryId(repositoryId);
+          memberDialogs.setBranch("");
           void loadRepositoryBranchOptions(repositoryId, true);
         }}
-        onSubmit={() => currentWorkspace && void addMember(currentWorkspace)}
+        onSubmit={() => currentWorkspace && void memberDialogs.addMember(currentWorkspace)}
       />
 
       <SwitchBranchDialog
-        branch={promoteBranch}
-        branches={promoteMember ? (repositoryBranchOptions[promoteMember.repositoryId] ?? []) : []}
+        branch={memberDialogs.promoteBranch}
+        branches={
+          memberDialogs.promoteMember
+            ? (repositoryBranchOptions[memberDialogs.promoteMember.repositoryId] ?? [])
+            : []
+        }
         branchLoading={Boolean(
-          promoteMember && branchLoadingIds.includes(promoteMember.repositoryId),
+          memberDialogs.promoteMember &&
+          branchLoadingIds.includes(memberDialogs.promoteMember.repositoryId),
         )}
         busy={busy}
-        error={promoteError}
-        member={promoteMember}
-        open={promoteOpen}
+        error={memberDialogs.promoteError}
+        member={memberDialogs.promoteMember}
+        open={memberDialogs.promoteOpen}
         submitting={busyAction === t("action.switchBranch") || busyAction === t("action.promote")}
-        onBranchChange={setPromoteBranch}
-        onClose={() => setPromoteOpen(false)}
+        onBranchChange={memberDialogs.setPromoteBranch}
+        onClose={() => memberDialogs.setPromoteOpen(false)}
         onLoadBranches={() => {
-          if (promoteMember) void loadRepositoryBranchOptions(promoteMember.repositoryId);
+          if (memberDialogs.promoteMember)
+            void loadRepositoryBranchOptions(memberDialogs.promoteMember.repositoryId);
         }}
-        onSubmit={() => void submitPromoteReference()}
+        onSubmit={() => void memberDialogs.submitPromoteReference()}
       />
 
       <RequirementDialog
@@ -868,20 +514,20 @@ export default function WorkspaceApp() {
         onLoadBranches={(repositoryId) => void loadRepositoryBranchOptions(repositoryId)}
         onRepositoryQueryChange={requirement.setRepositoryQuery}
         onSourceChange={requirement.setSourceId}
-        onSubmit={() => void submitClone()}
+        onSubmit={() => void submitRequirement(requirement)}
         onTargetNameChange={requirement.setTargetName}
         onToggleReference={requirement.toggleReference}
         onToggleRepository={requirement.toggleRepository}
       />
 
       <ConfirmActionDialog
-        acknowledged={confirmAcknowledged}
+        acknowledged={memberDialogs.confirmAcknowledged}
         busy={Boolean(busyAction)}
-        open={confirmOpen}
-        state={confirmState}
-        onAcknowledgedChange={setConfirmAcknowledged}
-        onClose={() => setConfirmOpen(false)}
-        onConfirm={() => void confirmAction()}
+        open={memberDialogs.confirmOpen}
+        state={memberDialogs.confirmState}
+        onAcknowledgedChange={memberDialogs.setConfirmAcknowledged}
+        onClose={() => memberDialogs.setConfirmOpen(false)}
+        onConfirm={() => void memberDialogs.confirmAction()}
       />
     </>
   );

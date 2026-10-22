@@ -8,6 +8,7 @@ export const routePaths = {
   settings: "/settings/storage",
   settingsPattern: "/settings/*",
   doctor: "/settings/doctor",
+  worktreeAudit: "/settings/doctor/worktrees",
 } as const;
 
 interface DevtoolRoutesProps {
