@@ -2,7 +2,7 @@ import { Button, Form, Input, Modal, Select, Space, Typography } from "antd";
 
 import { useI18n } from "../../../../app/i18n.js";
 import type { RepositoryBranch, RepositoryRecord } from "../../../../../types.js";
-import { BranchSelect } from "../BranchSelect.js";
+import { DevelopmentBranchSelect } from "../DevelopmentBranchSelect.js";
 
 const { Paragraph } = Typography;
 
@@ -16,6 +16,8 @@ export interface AddRepositoryDialogProps {
   repositories: RepositoryRecord[];
   selectedRepositoryId: string;
   submitting: boolean;
+  useDefaultBranch: boolean;
+  onDefaultBranchChange: (value: boolean) => void;
   onAliasChange: (value: string) => void;
   onBranchChange: (value: string) => void;
   onClose: () => void;
@@ -34,6 +36,8 @@ export function AddRepositoryDialog({
   repositories,
   selectedRepositoryId,
   submitting,
+  useDefaultBranch,
+  onDefaultBranchChange,
   onAliasChange,
   onBranchChange,
   onClose,
@@ -56,7 +60,7 @@ export function AddRepositoryDialog({
             {t("common.cancel")}
           </Button>
           <Button
-            disabled={!selectedRepositoryId || !branch.trim() || busy}
+            disabled={!selectedRepositoryId || (!useDefaultBranch && !branch.trim()) || busy}
             form="add-repository-form"
             htmlType="submit"
             loading={submitting}
@@ -93,8 +97,14 @@ export function AddRepositoryDialog({
             onChange={(event) => onAliasChange(event.target.value)}
           />
         </Form.Item>
-        <Form.Item extra={t("add.branchExtra")} label={t("add.branch")} required>
-          <BranchSelect
+        <Form.Item
+          extra={useDefaultBranch ? undefined : t("add.branchExtra")}
+          label={t("add.branch")}
+          required
+        >
+          <DevelopmentBranchSelect
+            useDefaultBranch={useDefaultBranch}
+            onDefaultBranchChange={onDefaultBranchChange}
             branches={branches}
             id="repository-branch"
             loading={branchLoading}

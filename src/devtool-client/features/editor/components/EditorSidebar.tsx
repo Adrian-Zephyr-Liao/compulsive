@@ -18,6 +18,7 @@ export default function EditorSidebar({
   git,
   search,
   open,
+  openDiff,
   go,
   onFileAction,
   dark,
@@ -30,6 +31,7 @@ export default function EditorSidebar({
   git: ReturnType<typeof useEditorGit>;
   search: ReturnType<typeof useEditorSearch>;
   open: (path: string, pinned?: boolean) => void;
+  openDiff: (path: string, staged: boolean) => void;
   go: (path: string, line: number, column: number) => void;
   onFileAction: (action: FileAction, path: string) => void;
   dark: boolean;
@@ -83,6 +85,7 @@ export default function EditorSidebar({
             dark={dark}
             report={editor.report}
             open={(path) => open(path, true)}
+            openDiff={openDiff}
           />
         )}
       </div>

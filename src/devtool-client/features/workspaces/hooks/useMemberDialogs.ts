@@ -32,6 +32,7 @@ export function useMemberDialogs({
   const [selectedRepositoryId, setSelectedRepositoryId] = useState("");
   const [alias, setAlias] = useState("");
   const [branch, setBranch] = useState("");
+  const [useDefaultBranch, setUseDefaultBranch] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [promoteOpen, setPromoteOpen] = useState(false);
   const [promoteMember, setPromoteMember] = useState<WorktreeMember>();
@@ -75,7 +76,7 @@ export function useMemberDialogs({
 
   async function addMember(workspace: DevtoolWorkspace): Promise<void> {
     const repository = availableRepositories.find((item) => item.id === selectedRepositoryId);
-    if (!repository) return;
+    if (!repository || busy || (!useDefaultBranch && !branch.trim())) return;
     const rpc = await getRpc();
     const succeeded = await runAction(
       t("feedback.addRepository"),
@@ -84,7 +85,7 @@ export function useMemberDialogs({
           workspaceId: workspace.id,
           repositoryId: repository.id,
           ...(alias.trim() ? { alias: alias.trim() } : {}),
-          ...(branch.trim() ? { branch: branch.trim() } : {}),
+          ...(useDefaultBranch ? { useDefaultBranch: true } : { branch: branch.trim() }),
           createBranch: true,
         }),
       `${t("common.add")}: ${repository.name}`,
@@ -179,6 +180,8 @@ export function useMemberDialogs({
     setAlias,
     branch,
     setBranch,
+    useDefaultBranch,
+    setUseDefaultBranch,
     confirmOpen,
     setConfirmOpen,
     promoteOpen,

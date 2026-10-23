@@ -1,4 +1,4 @@
-import { Button, Dropdown, Input, Modal, Spin } from "antd";
+import { Button, Dropdown, Input, Modal } from "antd";
 import {
   BranchesOutlined,
   ClockCircleOutlined,
@@ -8,20 +8,19 @@ import {
   ReloadOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
-import { lazy, Suspense } from "react";
 import { useI18n } from "../../../app/i18n.js";
 import type { useEditorGit } from "../hooks/useEditorGit.js";
 import { BranchSelect } from "../../workspaces/components/BranchSelect.js";
 import EditorGitHistory from "./EditorGitHistory.js";
 import { groupGitChanges } from "../utils/gitChanges.js";
-const EditorDiff = lazy(() => import("./EditorDiff.js"));
 interface Props {
   git: ReturnType<typeof useEditorGit>;
   dark: boolean;
   report: (e: unknown) => void;
   open: (path: string) => void;
+  openDiff: (path: string, staged: boolean) => void;
 }
-export default function EditorGit({ git: g, dark, report, open }: Props) {
+export default function EditorGit({ git: g, dark, report, open, openDiff }: Props) {
   const { t } = useI18n();
   const changes = g.status?.changes.filter((c) => !c.ignored) ?? [];
   const groups = groupGitChanges(g.status);
@@ -159,9 +158,9 @@ export default function EditorGit({ git: g, dark, report, open }: Props) {
                         className="min-w-0 flex-1 truncate text-left text-sm"
                         title={change.path}
                         onClick={() =>
-                          group.key === "conflicts" || group.key === "untracked"
+                          group.key === "conflicts"
                             ? open(change.path)
-                            : void g.inspect(change.path, group.staged)
+                            : openDiff(change.path, group.staged)
                         }
                       >
                         {change.path.split("/").pop()}{" "}
@@ -229,17 +228,7 @@ export default function EditorGit({ git: g, dark, report, open }: Props) {
           )}
         </div>
       </div>
-      {g.diff && (
-        <Suspense fallback={<Spin />}>
-          <EditorDiff
-            {...g.diff}
-            onHunk={(index) => void g.hunk(index)}
-            dark={dark}
-            close={() => g.setDiff(undefined)}
-          />
-        </Suspense>
-      )}
-      <EditorGitHistory git={g} />
+      <EditorGitHistory history={g.history} dark={dark} />
       <Modal
         open={g.branchOpen}
         title={t("editor.branch")}

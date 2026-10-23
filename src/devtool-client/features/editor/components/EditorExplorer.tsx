@@ -2,11 +2,8 @@ import { useEffect, useState } from "react";
 import { Button, Dropdown, Spin, Tree, Tooltip } from "antd";
 import type { TreeDataNode } from "antd";
 import {
-  CodeOutlined,
   FileAddOutlined,
-  FileTextOutlined,
   FolderAddOutlined,
-  FolderOutlined,
   ReloadOutlined,
   VerticalAlignTopOutlined,
 } from "@ant-design/icons";
@@ -14,6 +11,7 @@ import { useI18n } from "../../../app/i18n.js";
 import type { ProjectDirectory } from "../../../../project/files.js";
 import type { ProjectGitChange } from "../../../../project/git.js";
 import type { FileAction } from "../types.js";
+import EditorFileIcon from "./EditorFileIcon.js";
 interface Props {
   directories: Record<string, ProjectDirectory>;
   loading: boolean;
@@ -36,7 +34,7 @@ export default function EditorExplorer(props: Props) {
     ]);
   }, [props.path]);
   const nodes = (parent: string): TreeDataNode[] =>
-    (props.directories[parent]?.entries ?? []).map((entry) => {
+    (props.directories[parent]?.entries ?? []).map<TreeDataNode>((entry) => {
       const change = props.changes.find((c) => c.path === entry.path);
       const ignored =
         change?.ignored ||
@@ -58,12 +56,13 @@ export default function EditorExplorer(props: Props) {
       return {
         key: entry.path,
         isLeaf: !entry.directory,
-        icon: entry.directory ? (
-          <FolderOutlined />
-        ) : /\.(?:[cm]?[jt]sx?|json|css|html|vue|py|go|rs)$/.test(entry.name) ? (
-          <CodeOutlined className="text-[var(--editor-accent)]" />
-        ) : (
-          <FileTextOutlined />
+        icon: ({ expanded, selected }) => (
+          <EditorFileIcon
+            name={entry.name}
+            directory={entry.directory}
+            expanded={Boolean(expanded)}
+            selected={Boolean(selected)}
+          />
         ),
         title: (
           <Dropdown trigger={["contextMenu"]} menu={{ items: menu }}>
@@ -130,7 +129,8 @@ export default function EditorExplorer(props: Props) {
             <Spin size="small" />
           </div>
         ) : (
-          <Tree
+          <Tree.DirectoryTree
+            expandAction="click"
             blockNode
             showIcon
             selectedKeys={props.path ? [props.path] : []}

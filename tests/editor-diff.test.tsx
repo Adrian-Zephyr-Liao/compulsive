@@ -6,6 +6,62 @@ import EditorDiff from "../src/devtool-client/features/editor/components/EditorD
 afterEach(() => vi.unstubAllGlobals());
 
 describe("embedded diff layout", () => {
+  it.each(["staged", "working", "history", "disk"] as const)(
+    "names the %s baselines and keeps hunk actions out of the toolbar",
+    (kind) => {
+      vi.stubGlobal("window", {
+        localStorage: { getItem: () => "en-US" },
+        navigator: { language: "en-US" },
+      });
+      const html = renderToStaticMarkup(
+        <LanguageProvider>
+          <EditorDiff
+            path="src/file.ts"
+            original="old"
+            content="new"
+            dark={false}
+            embedded
+            close={vi.fn()}
+            kind={kind}
+            revision="1234567890abcdef"
+            hunks={["@@ -1 +1 @@"]}
+            onHunk={vi.fn()}
+          />
+        </LanguageProvider>,
+      );
+      for (const label of kind === "staged"
+        ? ["HEAD", "Index · staged"]
+        : kind === "working"
+          ? ["Index · staged", "Working directory · saved"]
+          : kind === "history"
+            ? ["12345678^", "12345678", "Read-only"]
+            : ["Saved on disk", "Unsaved editor buffer", "Read-only"])
+        expect(html).toContain(label);
+      expect(html).not.toContain("Stage hunk 1");
+      expect(html).not.toContain("Unstage hunk 1");
+      expect(html).not.toContain('role="dialog"');
+    },
+  );
+  it("shows an explicit empty comparison instead of a blank code surface", () => {
+    vi.stubGlobal("window", {
+      localStorage: { getItem: () => "en-US" },
+      navigator: { language: "en-US" },
+    });
+    const html = renderToStaticMarkup(
+      <LanguageProvider>
+        <EditorDiff
+          path="file.ts"
+          original="same"
+          content="same"
+          dark={false}
+          embedded
+          close={vi.fn()}
+        />
+      </LanguageProvider>,
+    );
+    expect(html).toContain("No changes in this comparison");
+    expect(html).toContain("0 / 0");
+  });
   it.each([false, true])(
     "uses the review's retained layout without a modal (side=%s)",
     (sideBySide) => {
@@ -62,6 +118,7 @@ describe("embedded diff layout", () => {
       expect(html).toContain(locale === "en-US" ? "After" : "变更后");
       expect(html).not.toContain("ant-segmented");
       expect(html).not.toContain("cm-editor");
+      expect(html).not.toContain('class="editor-diff ');
     },
   );
 

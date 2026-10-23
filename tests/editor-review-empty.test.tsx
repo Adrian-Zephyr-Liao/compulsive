@@ -29,6 +29,7 @@ describe("review empty states", () => {
           <LanguageProvider>
             <EditorReview
               active
+              dirtyPaths={[]}
               getRpc={getRpc}
               scope={{ workspaceId: "workspace:test", repositoryId: "local:test" }}
               git={{
@@ -36,6 +37,8 @@ describe("review empty states", () => {
                 refresh: vi.fn(async () => status),
                 busy: false,
                 discardAll: vi.fn(async () => {}),
+                hunk: vi.fn(async () => {}),
+                run: vi.fn(async () => {}),
               }}
               dark={false}
               onOpen={vi.fn()}

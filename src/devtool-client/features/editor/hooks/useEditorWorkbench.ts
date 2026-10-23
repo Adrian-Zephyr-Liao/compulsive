@@ -16,6 +16,7 @@ import {
   pruneEditorStates,
   changedEditorDirectories,
   type EditorColumn,
+  type EditorTab,
 } from "../utils/editorState.js";
 
 export function useEditorWorkbench(
@@ -23,6 +24,7 @@ export function useEditorWorkbench(
   scope: EditorScope,
   initialPath: string,
   connected = true,
+  initialDiff?: EditorTab["diff"],
 ) {
   const { t } = useI18n();
   const {
@@ -55,7 +57,7 @@ export function useEditorWorkbench(
   const [columnSizes, setColumnSizes] = useState<number[]>([]);
   const states = useRef(new Map<string, EditorState>());
   const views = useRef(new Map<string, EditorView>());
-  const closed = useRef<Array<{ path: string; preview: boolean }>>([]);
+  const closed = useRef<EditorTab[]>([]);
   const { workspaceId, repositoryId } = scope;
   const loadDirectory = useCallback(
     async (path: string) => {
@@ -86,10 +88,13 @@ export function useEditorWorkbench(
           setRecent(saved.session.recent);
           setColumnSizes(saved.session.columnSizes);
         }
-        if (initialPath) next = openEditorTab(next, next[0]!.id, initialPath, true);
+        if (initialPath)
+          next = openEditorTab(next, next[0]!.id, initialPath, true, false, [], initialDiff);
         setColumns(next);
         setActiveColumn(next[0]!.id);
-        const paths = [...new Set(next.flatMap((c) => c.tabs.map((tab) => tab.path)))].slice(0, 50);
+        const paths = [
+          ...new Set(next.flatMap((c) => c.tabs.filter((tab) => !tab.diff).map((tab) => tab.path))),
+        ].slice(0, 50);
         await Promise.all(paths.map((path) => loadDocument(path).catch(report)));
       })(),
     ])
@@ -159,7 +164,9 @@ export function useEditorWorkbench(
   useEffect(() => {
     if (!ready) return;
     pruneEditorStates(columns, states.current);
-    const openPaths = new Set(columns.flatMap((c) => c.tabs.map((tab) => tab.path)));
+    const openPaths = new Set(
+      columns.flatMap((c) => c.tabs.filter((tab) => !tab.diff).map((tab) => tab.path)),
+    );
     updateDocuments((current) => {
       const entries = Object.entries(current).filter(
         ([path, doc]) => openPaths.has(path) || doc.content !== doc.saved,
@@ -207,17 +214,30 @@ export function useEditorWorkbench(
       })),
     );
   }
+  function openDiff(path: string, staged: boolean, column = activeColumn) {
+    setColumns((current) =>
+      openEditorTab(
+        current,
+        column,
+        path,
+        true,
+        false,
+        dirty.map((d) => d.path),
+        staged ? "staged" : "working",
+      ),
+    );
+  }
   async function close(column: string, id: string) {
     const tab = columns.find((c) => c.id === column)?.tabs.find((tab) => tabId(tab) === id);
     if (!tab) return;
     const other = columns.some((c) =>
-      c.tabs.some((t) => t.path === tab.path && (c.id !== column || tabId(t) !== id)),
+      c.tabs.some((t) => !t.diff && t.path === tab.path && (c.id !== column || tabId(t) !== id)),
     );
-    if (!other && !(await confirmDiscard(tab.path))) return;
-    closed.current.push({ path: tab.path, preview: tab.preview });
+    if (!tab.diff && !other && !(await confirmDiscard(tab.path))) return;
+    closed.current.push(tab);
     closed.current = closed.current.slice(-20);
     setColumns((current) => closeEditorTab(current, column, id));
-    if (!other) {
+    if (!tab.diff && !other) {
       updateDocuments((current) => {
         const next = { ...current };
         delete next[tab.path];
@@ -227,7 +247,8 @@ export function useEditorWorkbench(
   }
   async function reopen() {
     const tab = closed.current.pop();
-    if (tab) await open(tab.path, true, tab.preview);
+    if (tab?.diff) openDiff(tab.path, tab.diff === "staged");
+    else if (tab) await open(tab.path, true, tab.preview);
   }
   function split() {
     if (columns.length >= 8) return;
@@ -287,6 +308,7 @@ export function useEditorWorkbench(
     states,
     views,
     open,
+    openDiff,
     edit,
     save,
     saveAll,

@@ -1,6 +1,6 @@
 .cpl-editor,
 .cpl-editor-overlay,
-.css-var-compulsive-editor {
+.compulsive-editor {
   --editor-bg: var(--ant-color-bg-container);
   --editor-panel: var(--ant-color-bg-layout);
   --editor-text: var(--ant-color-text);
@@ -71,6 +71,11 @@
 .editor-result:hover {
   background: var(--editor-hover);
 }
+
+.cpl-editor-overlay .editor-history-row:focus-visible {
+  outline: 2px solid var(--ant-color-primary);
+  outline-offset: -2px;
+}
 .editor-breadcrumb ol {
   flex-wrap: nowrap;
 }
@@ -91,6 +96,48 @@
 }
 .editor-diff .cm-editor {
   height: 100%;
+}
+.editor-hunk-bar {
+  position: sticky;
+  left: 0;
+  width: var(--diff-pane-width, 100%);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 16px;
+  min-height: 32px;
+  background: var(--editor-panel);
+  border-block: 1px solid var(--editor-border);
+  color: var(--editor-muted);
+  font-size: 12px;
+}
+.editor-hunk-bar span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.editor-hunk-bar button {
+  flex: none;
+  white-space: nowrap;
+  border: 0;
+  border-radius: var(--ant-border-radius-sm);
+  padding: 2px 8px;
+  background: transparent;
+  color: var(--editor-accent);
+  font: inherit;
+  cursor: pointer;
+}
+.editor-hunk-bar button:hover:not(:disabled) {
+  background: var(--editor-hover);
+}
+.editor-hunk-bar button:focus-visible {
+  outline: 2px solid var(--editor-accent);
+}
+.editor-hunk-bar button:disabled {
+  color: var(--ant-color-text-disabled);
+  cursor: not-allowed;
 }
 .editor-markdown {
   line-height: 1.8;

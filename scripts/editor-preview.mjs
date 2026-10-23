@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { crc32, deflateSync } from "node:zlib";
 import { createRepositoryManager } from "../dist/index.mjs";
 function previewPng(color) {
@@ -71,6 +72,32 @@ await writeFile(join(source, "preview.png"), previewPng([69, 104, 220]));
 await writeFile(join(source, "deleted.png"), previewPng([69, 104, 220]));
 await git(source, "add", ".");
 await git(source, "commit", "-m", "Initialize editor demo");
+// Real history, including a merge, for the history browser's isolated acceptance check.
+for (const [index, message] of [
+  "feat(editor): add repository search",
+  "fix(editor): normalize search input",
+  "refactor(editor): separate repository matching",
+  "test(editor): cover empty search queries",
+  "docs(editor): describe repository navigation",
+].entries()) {
+  await writeFile(join(source, "src/search.ts"), `export const searchVersion = ${index + 1};\n`);
+  await git(source, "add", "src/search.ts");
+  await git(source, "commit", "-m", message);
+}
+await git(source, "switch", "-c", "feat/search");
+await writeFile(
+  join(source, "src/search.ts"),
+  "export const searchVersion = 6;\nexport const searchLimit = 100;\n",
+);
+await git(source, "commit", "-am", "feat(search): bound repository results");
+await git(source, "switch", "main");
+await git(source, "commit", "--allow-empty", "-m", "chore(editor): prepare search review");
+await git(source, "merge", "--no-ff", "feat/search", "-m", "Merge repository search improvements");
+await writeFile(
+  join(source, "src/search.ts"),
+  "export const searchVersion = 7;\nexport const searchLimit = 200;\n\nexport function matchesRepository(name: string, query: string) {\n  const normalized = query.trim().toLowerCase();\n  return name.toLowerCase().includes(normalized);\n}\n",
+);
+await git(source, "commit", "-am", "feat(editor): improve repository search matching");
 await git(source, "push", "-u", "origin", "main");
 const manager = createRepositoryManager({
   dataDir: join(directory, "data"),
@@ -101,9 +128,17 @@ await writeFile(join(editorRoot, "preview.png"), previewPng([119, 78, 220]));
 await writeFile(join(editorRoot, "new.png"), previewPng([119, 78, 220]));
 await rm(join(editorRoot, "deleted.png"));
 await git(editorRoot, "add", "preview.png");
+await git(editorRoot, "add", "src/workspace.ts");
+await writeFile(
+  join(editorRoot, "src/workspace.ts"),
+  (await readFile(join(editorRoot, "src/workspace.ts"), "utf8")).replace(
+    "return this.members.size;",
+    "return [...this.members.values()].filter(member => !member.archived).length;",
+  ),
+);
 const server = spawn(
   process.execPath,
-  [new URL("../dist/bin.mjs", import.meta.url).pathname, "ui", "--no-open"],
+  [fileURLToPath(new URL("../dist/bin.mjs", import.meta.url)), "ui", "--no-open"],
   { env: { ...env, CPL_HOME: join(directory, "data") }, stdio: ["ignore", "pipe", "inherit"] },
 );
 server.stdout.on("data", (chunk) => {

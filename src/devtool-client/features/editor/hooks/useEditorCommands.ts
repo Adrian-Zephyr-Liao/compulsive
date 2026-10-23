@@ -31,7 +31,7 @@ export function useEditorCommands({
       label: "editor.save",
       shortcut: "⌘S",
       run: () => {
-        if (editor.tab) void editor.save(editor.tab.path).catch(editor.report);
+        if (editor.tab && !editor.tab.diff) void editor.save(editor.tab.path).catch(editor.report);
       },
     },
     {

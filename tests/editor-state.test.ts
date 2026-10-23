@@ -42,6 +42,23 @@ describe("editor tabs and columns", () => {
     expect(columns).toHaveLength(1);
     expect(columns[0]?.tabs.map((t) => t.path)).toEqual(["two.ts", "one.ts"]);
   });
+  it("keeps source, working diff and staged diff independent across moves and closes", () => {
+    let columns = openEditorTab(empty(), "a", "file.ts", true);
+    columns = openEditorTab(columns, "a", "file.ts", true, false, [], "working");
+    columns = openEditorTab(columns, "a", "file.ts", true, false, [], "staged");
+    const ids = columns[0]!.tabs.map(tabId);
+    expect(new Set(ids).size).toBe(3);
+    columns.push({ id: "b", active: "", tabs: [] });
+    columns = moveEditorTab(columns, "a", "b", ids[2]!, 0);
+    expect(columns[1]?.tabs[0]?.diff).toBe("staged");
+    columns = closeEditorTab(columns, "a", ids[0]!);
+    expect(columns[0]?.tabs[0]?.diff).toBe("working");
+    const states = new Map([["a:file.ts", "source undo"]]);
+    pruneEditorStates(columns, states);
+    expect(states.size).toBe(0);
+    const reservedLookingPath = "diff:staged:file.ts";
+    expect(tabId({ path: reservedLookingPath, preview: false })).not.toBe(ids[2]);
+  });
   it("ranks fuzzy file paths and bounds palette results", () => {
     expect(fuzzyPaths(["src/parser.ts", "src/path.ts", "README.md"], "path")[0]).toBe(
       "src/path.ts",

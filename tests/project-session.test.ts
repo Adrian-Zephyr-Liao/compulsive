@@ -54,4 +54,30 @@ describe("editor local sessions", () => {
     );
     await expect(projectSession(f.manager, f.input())).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
+  it("round trips diff tabs and rejects unknown kinds without replacing the previous session", async () => {
+    const base = session();
+    const tab = base.columns[0]!.tabs[0]!;
+    const next = {
+      ...base,
+      columns: [
+        {
+          ...base.columns[0]!,
+          tabs: [tab, { ...tab, diff: "staged" }, { ...tab, diff: "working" }],
+        },
+      ],
+    };
+    expect(await projectSession(f.manager, f.input(), next)).toEqual(next);
+    for (const invalid of [
+      { ...tab, diff: "history" },
+      { ...tab, diff: "staged", preview: true },
+    ]) {
+      await expect(
+        projectSession(f.manager, f.input(), {
+          ...next,
+          columns: [{ ...next.columns[0]!, tabs: [invalid] }],
+        }),
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      expect(await projectSession(f.manager, f.input())).toEqual(next);
+    }
+  });
 });

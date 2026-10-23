@@ -40,6 +40,12 @@ the stash object ID and restore state returned by the server. Conflict inspectio
 repository drawer and must not target a newly selected requirement through a stale notification.
 Notifications do not automatically start Codex or authorize a force push.
 
+Create/clone and add-repository forms share `DevelopmentBranchSelect`: each development repository
+can use an independent branch or origin's default branch. `useRequirementDraft` owns per-repository
+choices and excludes reference/deselected repositories from default-branch submissions;
+`useMemberDialogs` owns the single-repository choice. Both send explicit intent through the existing
+typed RPCs; default-branch discovery and occupied-branch protection remain server-owned.
+
 The settings feature keeps `SystemSettingsPage.tsx` as its route/navigation shell. `StorageSettingsPanel.tsx` owns configuration form rendering and field rules; `DoctorPanel.tsx` owns the basic diagnostic presentation. `useSettingsState.ts` owns the draft/form instance and on-demand diagnostic execution/results; call these hooks in the shell, not route children, so switching settings subroutes retains existing drafts and results. `WorktreeAuditPanel.tsx` and `useWorktreeAudit.ts` remain the separate inventory/removal presentation and controller. No settings panel creates an additional RPC connection.
 
 ## Local routes
@@ -74,9 +80,17 @@ The application uses React Router's `createHashRouter` and `RouterProvider` so C
 4. Do not duplicate brand tokens in JSX and CSS. Ant Design exposes the configured values as CSS variables for structural styles.
 5. Keep modal, dropdown, tooltip, empty, loading, and error states in the same visual system as the main screen.
 
+Editor CSS aliases also target `.compulsive-editor`, the explicit `ConfigProvider.theme.cssVar.key` class carried by Ant Design portals. Do not prepend `css-var-` to an explicit key or rely only on the editor's DOM ancestry for overlay colors.
+
 `app/appearance.tsx` owns one global light/dark state, hydrated from the shared connection's initial `get-state` response. The header and editor preferences change the same state after `update-devtool-preferences` succeeds. `app/theme.ts` owns both semantic palettes and Ant Design algorithms; page chrome and overlays consume tokens, not fixed white surfaces. Theme changes must not recreate the router/connection or discard editor buffers. The choice is atomically stored in `devtool-preferences.json` beside CPL config, not in browser storage or per-repository sessions. Refreshes of unrelated workspace state do not override an in-session theme choice.
 
 ## Local editor boundary
+
+`EditorExplorer` uses Ant Design `Tree.DirectoryTree` with click expansion for directory names and
+arrows. Lazy loading, keyboard navigation and context actions remain native tree behavior.
+`EditorFileIcon` maps file types to the installed Ant Design icons and semantic color tokens, so
+open/closed folders, code, configuration, Markdown, images and documents follow global appearance
+without external icon requests or a second theme setting.
 
 Repository actions expose **Open editor** without changing **Open in VS Code**. `EditorPage` inherits the global Ant Design typography, radius, control heights and appearance, including overlays. Only Tree/Tabs/Splitter density tokens are editor-specific: 32px tree rows, 40px card tabs and a 1px resize divider. `EditorWorkspace` composes feature controllers, a native Segmented sidebar switch, columns and dialogs. `EditorFileTabs` owns native editable-card Tabs and forwards close/reorder/pin actions to the existing controller; `EditorTerminalDock` uses the same Tabs while keeping inactive PTYs mounted. `EditorChrome` renders 48px navigation and a 32px status bar; layout spacing follows 8/16px steps, with 12px secondary text and the inherited 14px body text. Ant Design Tree/Splitter remain the navigation/resize primitives; CodeMirror 6, merge views, xterm.js and Markdown rendering load locally on demand. Do not put them in an eagerly loaded generic vendor chunk.
 
@@ -95,7 +109,9 @@ features/editor/
 
 `useEditorWorkbench` coordinates columns, independent view state, layout persistence and filesystem-event refresh. `useEditorDocuments` owns shared buffers, bounded loads, per-file serialized/versioned saves and disk comparisons; `useEditorGuards` owns dirty-close, route and browser-leave protection. `useEditorCommands` binds the command catalog and keyboard lifecycle; key-to-command mapping and document/tab transitions are pure utilities. `useEditorFileActions`, `useEditorSearch`, `useEditorGit` and `useEditorTerminals` own their RPC calls and failure paths. `EditorSidebar`, `EditorFileDialog` and `EditorGitHistory` own coherent presentations, not another set of controllers. No editor controller creates another connection. Connection loss must not replace the editor with an error page or drop buffers.
 
-The default entry is diff-first. `EditorReview` owns the grouped change list and embedded read-only viewer, while `useEditorReview` guards its async requests against stale selections and mode/repository changes. `utils/gitChanges.ts` shares grouping with the existing Git panel and resolves optional `view=changes|files` URL state; legacy explicit file links keep opening All files. Keep the full editor mounted when hidden so switching back preserves buffers and view state. Review uses saved local Git changes and manual refresh, not remote-main comparison or Git polling. The existing `EditorDiff` supports embedded review and modal history/disk comparisons without duplicating the CodeMirror renderer.
+The default entry is diff-first. `EditorReview` owns the grouped change list and embedded read-only viewer, while `useEditorReview` guards its async requests against stale selections and mode/repository changes. `utils/gitChanges.ts` shares grouping with the existing Git panel and resolves optional `view=changes|files` URL state; legacy explicit file links keep opening All files. Keep the full editor mounted when hidden so switching back preserves buffers and view state. Review uses saved local Git changes and manual refresh, not remote-main comparison or Git polling. `EditorDiff` owns the common review frame, baselines and responsive controls; `EditorDiffCode` owns the read-only CodeMirror lifecycle, navigation and Git-range action widgets. `EditorDiffTab` guards scoped async reads for All files. Source, staged and working tabs have separate identities; optional `diff=staged|working` file links preserve the selected comparison. Disk comparisons alone start as dialogs; embedded review can be expanded explicitly.
+
+`useEditorHistory`, composed by `useEditorGit`, owns read-only history pagination, commit/file selection and scoped async requests. Selection never replaces the loaded commit list; loading another page preserves the selected commit and file filter. Closing the browser or changing repositories invalidates pending results. `EditorGitHistory` presents a compact graph/list beside commit metadata and a searchable changed-file selector, with an embedded `EditorDiff` instead of a second dialog. `EditorHistoryList` owns the graph rows; their colors inherit Ant Design tokens. Narrow windows stack the list above the detail view. File blame remains accessible from the command palette and can switch back to commit diffs. Loading, empty and retry states are local to history and do not block Git mutation controls.
 
 Text diffs load the existing filename-based language support and use the editor's dark syntax palette. Their CodeMirror theme uses Ant Design success/error backgrounds for changed lines, stronger border-color backgrounds for changed characters and matching gutter markers in both inline and side-by-side modes. Disable active-line and same-word overlays in this read-only view so they do not obscure diff meaning; do not change source-editor behavior or code column widths.
 
@@ -114,6 +130,8 @@ Markdown skips raw HTML and remote images; SVG is displayed in image mode, not i
 `editor-sessions.json` sits beside CPL config and stores only validated paths, tab/view positions, sizes, recent command IDs and editor preferences. Legacy per-session `dark` fields are ignored and omitted on the next save; opening a repository must not change global appearance. Unsaved text remains memory-only; browser refresh/close uses the native before-unload safeguard because browsers do not support a custom asynchronous close dialog. In-app navigation and tab/file actions use Ant Design dialogs. See [editor acceptance](../../docs/editor-spec.md) for the feature contract and verification record.
 
 ## React rules
+
+Diff tab session metadata is an optional `diff: staged|working` field, validated separately from source previews. `useEditorDiff` owns scoped reads, stale-response invalidation and retry; `EditorDiffTab` only composes the presentation and existing Git callbacks. The shared reader uses Git ranges for block actions and CodeMirror chunks for navigation. The base pane mirrors action-row heights to preserve side-by-side line alignment; reading position uses the shared merge scroller and survives explicit expansion.
 
 - State belongs to the closest common owner; derive filtered collections instead of storing duplicate state.
 - Feature components receive plain values and callbacks. They do not call RPC methods directly.

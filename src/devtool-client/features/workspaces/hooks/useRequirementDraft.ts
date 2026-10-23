@@ -30,6 +30,7 @@ export function useRequirementDraft({
   const [repositoryQuery, setRepositoryQuery] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [referenceIds, setReferenceIds] = useState<string[]>([]);
+  const [defaultBranchIds, setDefaultBranchIds] = useState<string[]>([]);
   const [error, setError] = useState("");
 
   const source = useMemo(
@@ -68,7 +69,10 @@ export function useRequirementDraft({
     targetName.trim() &&
     (mode === "create" || sourceId) &&
     (mode === "create" || selectedIds.length > 0) &&
-    developmentIds.every((repositoryId) => repositoryBranches[repositoryId]?.trim()) &&
+    developmentIds.every(
+      (repositoryId) =>
+        defaultBranchIds.includes(repositoryId) || repositoryBranches[repositoryId]?.trim(),
+    ) &&
     !busy,
   );
 
@@ -77,6 +81,7 @@ export function useRequirementDraft({
     setRepositoryQuery("");
     setRepositoryBranches({});
     setCustomizedBranchIds([]);
+    setDefaultBranchIds([]);
     onResetBranches();
     setSelectedIds(source?.members.map((member) => member.repositoryId) ?? []);
     setReferenceIds(
@@ -105,6 +110,7 @@ export function useRequirementDraft({
     setTargetName("");
     setRepositoryBranches({});
     setCustomizedBranchIds([]);
+    setDefaultBranchIds([]);
     onResetBranches();
     setError("");
     setRepositoryQuery("");
@@ -123,6 +129,7 @@ export function useRequirementDraft({
     if (selectedIds.includes(repositoryId)) {
       setSelectedIds((current) => current.filter((selected) => selected !== repositoryId));
       setReferenceIds((current) => current.filter((reference) => reference !== repositoryId));
+      setDefaultBranchIds((current) => current.filter((id) => id !== repositoryId));
     } else setSelectedIds((current) => [...current, repositoryId]);
   }
 
@@ -141,11 +148,20 @@ export function useRequirementDraft({
     );
   }
 
+  function setRepositoryDefaultBranch(repositoryId: string, value: boolean): void {
+    setDefaultBranchIds((current) =>
+      value
+        ? [...new Set([...current, repositoryId])]
+        : current.filter((id) => id !== repositoryId),
+    );
+  }
+
   return {
     canSubmit,
     close: () => setOpen(false),
     developmentCount: developmentIds.length,
     developmentIds,
+    defaultBranchIds: defaultBranchIds.filter((id) => developmentIds.includes(id)),
     error,
     filteredRepositories,
     mode,
@@ -158,6 +174,7 @@ export function useRequirementDraft({
     selectedIds,
     setError,
     setRepositoryBranch,
+    setRepositoryDefaultBranch,
     setRepositoryQuery,
     setSourceId,
     setTargetName,

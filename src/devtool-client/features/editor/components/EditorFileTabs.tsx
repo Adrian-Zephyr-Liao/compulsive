@@ -1,6 +1,6 @@
 import type { DragEvent, ReactNode } from "react";
 import { Badge, Tabs, Tooltip } from "antd";
-import { CloseOutlined, EyeOutlined, FileTextOutlined } from "@ant-design/icons";
+import { CloseOutlined, DiffOutlined, EyeOutlined, FileTextOutlined } from "@ant-design/icons";
 import { useI18n } from "../../../app/i18n.js";
 import { moveEditorTab, tabId, type EditorColumn } from "../utils/editorState.js";
 import type { useEditorWorkbench } from "../hooks/useEditorWorkbench.js";
@@ -75,7 +75,7 @@ export default function EditorFileTabs({
       items={column.tabs.map((item, index) => {
         const id = tabId(item);
         const doc = e.documents[item.path];
-        const dirty = doc !== undefined && doc.content !== doc.saved;
+        const dirty = !item.diff && doc !== undefined && doc.content !== doc.saved;
         return {
           key: id,
           closeIcon: (
@@ -117,8 +117,19 @@ export default function EditorFileTabs({
                 onDragOver={(event) => event.preventDefault()}
                 onDrop={(event) => drop(event, index)}
               >
-                {item.preview ? <EyeOutlined /> : <FileTextOutlined />}
+                {item.diff ? (
+                  <DiffOutlined />
+                ) : item.preview ? (
+                  <EyeOutlined />
+                ) : (
+                  <FileTextOutlined />
+                )}
                 <span className="truncate">{item.path.split("/").pop()}</span>
+                {item.diff && (
+                  <span className="shrink-0 text-xs text-[var(--editor-muted)]">
+                    {t(item.diff === "staged" ? "editor.staged" : "editor.changes")}
+                  </span>
+                )}
                 {dirty && (
                   <Badge color="var(--editor-accent)" title={t("editor.dirty", { count: 1 })} />
                 )}

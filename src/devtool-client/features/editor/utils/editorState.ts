@@ -33,7 +33,7 @@ export type EditorTab = EditorColumn["tabs"][number];
 export function pruneEditorStates<T>(columns: EditorColumn[], states: Map<string, T>): void {
   const open = new Set(
     columns.flatMap((c) =>
-      c.tabs.filter((tab) => !tab.preview).map((tab) => `${c.id}:${tab.path}`),
+      c.tabs.filter((tab) => !tab.preview && !tab.diff).map((tab) => `${c.id}:${tab.path}`),
     ),
   );
   for (const key of states.keys()) if (!open.has(key)) states.delete(key);
@@ -51,8 +51,8 @@ export function changedEditorDirectories(loaded: string[], changed: string[]): s
     ),
   );
 }
-export const tabId = (tab: Pick<EditorTab, "path" | "preview">) =>
-  `${tab.preview ? "preview:" : ""}${tab.path}`;
+export const tabId = (tab: Pick<EditorTab, "path" | "preview" | "diff">) =>
+  tab.diff ? `\0diff:${tab.diff}:${tab.path}` : `${tab.preview ? "preview:" : ""}${tab.path}`;
 export function openEditorTab(
   columns: EditorColumn[],
   columnId: string,
@@ -60,10 +60,11 @@ export function openEditorTab(
   pinned: boolean,
   preview = false,
   dirtyPaths: string[] = [],
+  diff?: EditorTab["diff"],
 ): EditorColumn[] {
   return columns.map((column) => {
     if (column.id !== columnId) return column;
-    const id = tabId({ path, preview });
+    const id = tabId({ path, preview, ...(diff && { diff }) });
     const existing = column.tabs.find((tab) => tabId(tab) === id);
     if (existing)
       return {
@@ -73,11 +74,13 @@ export function openEditorTab(
           tab === existing ? { ...tab, pinned: tab.pinned || pinned } : tab,
         ),
       };
-    const tabs = column.tabs.filter((tab) => tab.pinned || dirtyPaths.includes(tab.path));
+    const tabs = column.tabs.filter(
+      (tab) => tab.pinned || (!tab.diff && dirtyPaths.includes(tab.path)),
+    );
     return {
       ...column,
       active: id,
-      tabs: [...tabs, { path, pinned, preview, cursor: 0, scroll: 0 }],
+      tabs: [...tabs, { path, pinned, preview, cursor: 0, scroll: 0, ...(diff && { diff }) }],
     };
   });
 }

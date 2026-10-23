@@ -24,6 +24,40 @@ const workspace: WorkspaceRecord = {
 };
 
 describe("devtool rpc", () => {
+  it("validates and forwards default-branch selections for add and clone", async () => {
+    const manager = createRepositoryManager();
+    const add = vi.spyOn(manager, "addWorkspaceMember").mockResolvedValue(workspace);
+    const clone = vi.spyOn(manager, "cloneWorkspace").mockResolvedValue(workspace);
+    const functions = createServerFunctions(manager);
+    for (const [name, input] of [
+      [
+        "add-workspace-member",
+        {
+          workspaceId: workspace.id,
+          repositoryId: "local:test",
+          createBranch: true,
+          useDefaultBranch: true,
+        },
+      ],
+      [
+        "clone-workspace",
+        { name: "Task", repositoryIds: ["local:test"], defaultBranchRepositoryIds: ["local:test"] },
+      ],
+    ] as const) {
+      const definition = functions.find((fn) => fn.name === name)!;
+      const result = await definition.args[0]!["~standard"].validate(input);
+      expect(result.issues).toBeUndefined();
+      if (result.issues) throw new Error("Invalid RPC fixture");
+      await definition.handler!(result.value as never);
+    }
+    expect(add).toHaveBeenCalledWith(
+      expect.objectContaining({ useDefaultBranch: true, mode: "worktree" }),
+    );
+    expect(clone).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultBranchRepositoryIds: ["local:test"] }),
+    );
+  });
+
   it("exposes workspace actions", () => {
     const names = createServerFunctions(createRepositoryManager()).map(({ name }) => name);
     expect(names).toHaveLength(58);

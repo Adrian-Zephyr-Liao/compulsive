@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as diffBlobs from "../src/project/git-diff.js";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createProjectFixture } from "./helpers/project-fixture.js";
@@ -15,6 +16,7 @@ describe("editor source control", () => {
     f = await createProjectFixture();
   }, 30000);
   afterEach(async () => {
+    vi.restoreAllMocks();
     await f.dispose();
   }, 20000);
   it("stages literal paths, previews both sides and rejects stale Git state", async () => {
@@ -199,6 +201,86 @@ describe("editor source control", () => {
     expect(status.changes[0]?.index).toBe("M");
     expect((await f.git(f.root, "show", ":origin.txt")).stdout).toBe("one reviewed change\n");
     expect(await readFile(join(f.root, "origin.txt"), "utf8")).toBe("one reviewed change\n");
+  });
+  async function twoHunks() {
+    const lines = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`);
+    await f.commit(f.root, "hunks.txt", lines.join("\n") + "\n");
+    const changed = [...lines];
+    changed[2] = "first edited region";
+    changed[30] = "second edited region";
+    await writeFile(join(f.root, "hunks.txt"), changed.join("\n") + "\n");
+    return changed.join("\n") + "\n";
+  }
+  it("targets a reviewed Git hunk and rejects reuse after the index changes", async () => {
+    const working = await twoHunks();
+    const diff = await projectGitDiff(f.manager, { ...f.input("hunks.txt"), staged: false });
+    expect(diff.hunks).toHaveLength(2);
+    await projectGitHunk(f.manager, {
+      ...f.input("hunks.txt"),
+      staged: false,
+      hunk: 1,
+      fingerprint: diff.fingerprint,
+    });
+    const index = (await f.git(f.root, "show", ":hunks.txt")).stdout;
+    expect(index).toContain("second edited region");
+    expect(index).not.toContain("first edited region");
+    await expect(
+      projectGitHunk(f.manager, {
+        ...f.input("hunks.txt"),
+        staged: false,
+        hunk: 0,
+        fingerprint: diff.fingerprint,
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await readFile(join(f.root, "hunks.txt"), "utf8")).toBe(working);
+  });
+  it("unstages only the selected Git hunk without changing the working file", async () => {
+    const working = await twoHunks();
+    await f.git(f.root, "add", "hunks.txt");
+    const staged = await projectGitDiff(f.manager, { ...f.input("hunks.txt"), staged: true });
+    expect(staged.hunks).toHaveLength(2);
+    await projectGitHunk(f.manager, {
+      ...f.input("hunks.txt"),
+      staged: true,
+      hunk: 1,
+      fingerprint: staged.fingerprint,
+    });
+    const index = (await f.git(f.root, "show", ":hunks.txt")).stdout;
+    expect(index).toContain("first edited region");
+    expect(index).not.toContain("second edited region");
+    expect(await readFile(join(f.root, "hunks.txt"), "utf8")).toBe(working);
+  });
+  it("rejects an external edit during a diff read without changing the file or index", async () => {
+    await writeFile(join(f.root, "origin.txt"), "reviewed content\n");
+    const readBlob = diffBlobs.readGitDiffBlob;
+    const index = (await f.git(f.root, "show", ":origin.txt")).stdout;
+    vi.spyOn(diffBlobs, "readGitDiffBlob").mockImplementationOnce(async (...args) => {
+      const result = await readBlob(...args);
+      await writeFile(join(f.root, "origin.txt"), "external edit during snapshot\n");
+      return result;
+    });
+    await expect(
+      projectGitDiff(f.manager, { ...f.input("origin.txt"), staged: false }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await readFile(join(f.root, "origin.txt"), "utf8")).toBe(
+      "external edit during snapshot\n",
+    );
+    expect((await f.git(f.root, "show", ":origin.txt")).stdout).toBe(index);
+  });
+  it("does not offer or accept a staged rename as a misleading hunk action", async () => {
+    await f.git(f.root, "mv", "origin.txt", "renamed.txt");
+    const diff = await projectGitDiff(f.manager, { ...f.input("renamed.txt"), staged: true });
+    expect(diff.hunks).toEqual([]);
+    const index = (await f.git(f.root, "ls-files", "--stage")).stdout;
+    await expect(
+      projectGitHunk(f.manager, {
+        ...f.input("renamed.txt"),
+        staged: true,
+        hunk: 0,
+        fingerprint: diff.fingerprint,
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect((await f.git(f.root, "ls-files", "--stage")).stdout).toBe(index);
   });
   it("undoes an unpublished commit without losing its content", async () => {
     await f.commit(f.root, "origin.txt", "new content\n");

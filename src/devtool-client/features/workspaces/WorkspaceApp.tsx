@@ -208,6 +208,7 @@ export default function WorkspaceApp() {
     memberDialogs.setShowAdd(false);
     memberDialogs.setAlias("");
     memberDialogs.setBranch("");
+    memberDialogs.setUseDefaultBranch(false);
     setDetailMember(undefined);
     memberDialogs.setPromoteOpen(false);
     memberDialogs.setConfirmOpen(false);
@@ -442,6 +443,7 @@ export default function WorkspaceApp() {
                         onAddRepository: () => {
                           memberDialogs.setAlias("");
                           memberDialogs.setBranch("");
+                          memberDialogs.setUseDefaultBranch(false);
                           memberDialogs.setShowAdd(true);
                           if (memberDialogs.selectedRepositoryId)
                             void loadRepositoryBranchOptions(
@@ -511,6 +513,8 @@ export default function WorkspaceApp() {
       />
 
       <AddRepositoryDialog
+        useDefaultBranch={memberDialogs.useDefaultBranch}
+        onDefaultBranchChange={memberDialogs.setUseDefaultBranch}
         alias={memberDialogs.alias}
         branch={memberDialogs.branch}
         branches={repositoryBranchOptions[memberDialogs.selectedRepositoryId] ?? []}
@@ -530,6 +534,7 @@ export default function WorkspaceApp() {
         onRepositoryChange={(repositoryId) => {
           memberDialogs.setSelectedRepositoryId(repositoryId);
           memberDialogs.setBranch("");
+          memberDialogs.setUseDefaultBranch(false);
           void loadRepositoryBranchOptions(repositoryId, true);
         }}
         onSubmit={() => currentWorkspace && void memberDialogs.addMember(currentWorkspace)}
@@ -561,6 +566,8 @@ export default function WorkspaceApp() {
       />
 
       <RequirementDialog
+        defaultBranchIds={requirement.defaultBranchIds}
+        onDefaultBranchChange={requirement.setRepositoryDefaultBranch}
         branchLoadingIds={branchLoadingIds}
         branchOptions={repositoryBranchOptions}
         busy={busy}

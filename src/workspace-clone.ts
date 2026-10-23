@@ -46,6 +46,16 @@ export async function cloneWorkspace(
     throw new CompulsiveError("INVALID_INPUT", "Clone branch name is required.");
   }
   const referenceIds = new Set(referenceRepositoryIds);
+  const defaultIds = new Set(input.defaultBranchRepositoryIds ?? []);
+  if (
+    defaultIds.size !== (input.defaultBranchRepositoryIds?.length ?? 0) ||
+    [...defaultIds].some((id) => !selectedIds.has(id) || referenceIds.has(id))
+  ) {
+    throw new CompulsiveError(
+      "INVALID_INPUT",
+      "Default-branch repositories must be unique selected development repositories.",
+    );
+  }
   const repositoryBranches = input.repositoryBranches ?? [];
   if (
     new Set(repositoryBranches.map(({ repositoryId }) => repositoryId)).size !==
@@ -65,6 +75,12 @@ export async function cloneWorkspace(
         throw new CompulsiveError(
           "INVALID_INPUT",
           "Reference repositories cannot specify a development branch.",
+        );
+      }
+      if (defaultIds.has(repositoryId)) {
+        throw new CompulsiveError(
+          "INVALID_INPUT",
+          "Default-branch repositories cannot specify another development branch.",
         );
       }
       const value = branch.trim();
@@ -108,7 +124,7 @@ export async function cloneWorkspace(
       repository,
       startPoint: "",
       reference: referenceIds.has(repositoryId),
-      branch: branches.get(repositoryId) ?? branchName,
+      branch: defaultIds.has(repositoryId) ? undefined : (branches.get(repositoryId) ?? branchName),
     };
   });
 
@@ -154,6 +170,8 @@ export async function cloneWorkspace(
       );
     }
     selectedRepository.startPoint = remoteBranch;
+    if (defaultIds.has(repository.id))
+      selectedRepository.branch = remoteBranch.slice("origin/".length);
   }
 
   const target = await createWorkspace(paths, { name });

@@ -25,6 +25,22 @@ describe("native editor tabs", () => {
                 tabs: [
                   { path: "README.md", pinned: true, preview: false, cursor: 5, scroll: 0 },
                   { path: "README.md", pinned: true, preview: true, cursor: 0, scroll: 0 },
+                  {
+                    path: "README.md",
+                    pinned: true,
+                    preview: false,
+                    diff: "staged",
+                    cursor: 0,
+                    scroll: 0,
+                  },
+                  {
+                    path: "README.md",
+                    pinned: true,
+                    preview: false,
+                    diff: "working",
+                    cursor: 0,
+                    scroll: 0,
+                  },
                 ],
               }}
               editor={{
@@ -48,8 +64,11 @@ describe("native editor tabs", () => {
         </LanguageProvider>,
       );
       expect(html).toContain("ant-tabs-editable-card");
-      expect(html.match(/role="tab"/g)).toHaveLength(2);
-      expect(html.match(/ant-tabs-tab-remove/g)).toHaveLength(2);
+      expect(html.match(/role="tab"/g)).toHaveLength(4);
+      expect(html.match(/ant-tabs-tab-remove/g)).toHaveLength(4);
+      expect(html).toContain("Staged");
+      expect(html).toContain("Changes");
+      expect(html.match(/ant-badge-status-dot/g)).toHaveLength(2);
       expect(html).toContain("ant-badge-status-dot");
       expect(html).toContain('aria-selected="true"');
       expect(html).toContain('aria-label="Close"');

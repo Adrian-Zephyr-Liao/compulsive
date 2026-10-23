@@ -26,6 +26,7 @@ export interface EditorSession {
       cursor: number;
       scroll: number;
       preview: boolean;
+      diff?: "staged" | "working";
     }>;
   }>;
   recent: string[];
@@ -73,6 +74,7 @@ function validSession(value: unknown): value is EditorSession {
           return (
             typeof t.pinned === "boolean" &&
             typeof t.preview === "boolean" &&
+            (t.diff === undefined || (!t.preview && ["staged", "working"].includes(t.diff))) &&
             bounded(t.cursor, 0, 8 * 1024 * 1024) &&
             bounded(t.scroll, 0, 1e9)
           );
@@ -138,6 +140,7 @@ export async function projectSession(
               cursor: t.cursor,
               scroll: t.scroll,
               preview: t.preview,
+              ...(t.diff !== undefined && { diff: t.diff }),
             })),
           })),
           recent: s.recent,

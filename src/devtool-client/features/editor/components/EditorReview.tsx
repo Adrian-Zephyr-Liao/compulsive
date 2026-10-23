@@ -20,20 +20,25 @@ export default function EditorReview({
   onOpenVscode,
   report,
   onCommit,
+  dirtyPaths,
 }: {
   active: boolean;
   getRpc: () => Promise<WorkspaceRpc>;
   scope: EditorScope;
-  git: Pick<ReturnType<typeof useEditorGit>, "status" | "refresh" | "busy" | "discardAll">;
+  git: Pick<
+    ReturnType<typeof useEditorGit>,
+    "status" | "refresh" | "busy" | "discardAll" | "hunk" | "run"
+  >;
   dark: boolean;
   onOpen: (path: string) => void;
   onAllFiles: () => void;
   onOpenVscode: () => void;
   report: (error: unknown) => void;
   onCommit: () => void;
+  dirtyPaths: string[];
 }) {
   const { t } = useI18n();
-  const [sideBySide, setSideBySide] = useState(false);
+  const [sideBySide, setSideBySide] = useState<boolean>();
   const review = useEditorReview(getRpc, scope, git.status, active);
   useEffect(() => {
     if (active && git.status) void git.refresh().catch(report);
@@ -147,7 +152,7 @@ export default function EditorReview({
       </Splitter.Panel>
       <Splitter.Panel min={280}>
         <main className="flex h-full min-h-0 flex-col" aria-label={t("editor.reviewChanges")}>
-          {entry && (
+          {entry && (entry.change.conflict || review.error) && (
             <div className="flex min-h-14 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[var(--editor-border)] px-4 py-2">
               <div className="min-w-0 flex-1">
                 <div className="truncate font-medium" title={entry.change.path}>
@@ -203,6 +208,14 @@ export default function EditorReview({
                   embedded
                   dark={dark}
                   close={onAllFiles}
+                  kind={entry?.staged ? "staged" : "working"}
+                  onHunk={(index) => void git.hunk(review.diff!, index)}
+                  onFileAction={() =>
+                    void git.run(entry?.staged ? "unstage" : "stage", [review.diff!.path])
+                  }
+                  busy={git.busy}
+                  actionsDisabled={dirtyPaths.includes(review.diff.path)}
+                  onOpen={canOpen ? () => onOpen(review.diff!.path) : undefined}
                   sideBySide={sideBySide}
                   onSideChange={setSideBySide}
                 />

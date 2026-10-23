@@ -124,48 +124,56 @@ export async function projectGitDiff(
   const { root } = await gitRoot(manager, input);
   if (input.revision && !/^[a-f0-9]{40,64}$/.test(input.revision))
     throw new CompulsiveError("INVALID_INPUT", "Select a full commit ID from history.");
-  const status = await readGitStatus(root);
-  const change = status.changes.find((c) => c.path === input.path);
-  const revision = input.revision ?? "HEAD";
-  const basePath =
-    input.staged || change?.worktree === "R" ? (change?.original ?? input.path) : input.path;
-  const readCurrent = async () => {
-    if (input.revision || input.staged)
-      return readGitDiffBlob(root, input.revision ?? "", input.path);
-    try {
-      return decodeGitDiff((await readProjectBytes(manager, input)).data);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      return { text: "" };
-    }
-  };
-  const [base, current] = await Promise.all([
-    readGitDiffBlob(
-      root,
-      input.revision ? `${revision}^` : input.staged ? "HEAD" : "",
-      input.revision ? input.path : basePath,
-    ),
-    readCurrent(),
-  ]);
-  const images: { original?: string; content?: string } | undefined =
-    base.image || current.image
-      ? {
-          ...(base.image && { original: base.image }),
-          ...(current.image && { content: current.image }),
-        }
-      : undefined;
-  return {
-    path: input.path,
-    original: base.text,
-    content: current.text,
-    staged: input.staged,
-    fingerprint: status.fingerprint,
-    ...(images && { images }),
-    hunks:
-      input.revision || images
+  return withProjectLock(root, async () => {
+    const status = await readGitStatus(root);
+    const change = status.changes.find((c) => c.path === input.path);
+    const revision = input.revision ?? "HEAD";
+    const basePath =
+      input.staged || change?.worktree === "R" ? (change?.original ?? input.path) : input.path;
+    const readCurrent = async () => {
+      if (input.revision || input.staged)
+        return readGitDiffBlob(root, input.revision ?? "", input.path);
+      try {
+        return decodeGitDiff((await readProjectBytes(manager, input)).data);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        return { text: "" };
+      }
+    };
+    const [base, current] = await Promise.all([
+      readGitDiffBlob(
+        root,
+        input.revision ? `${revision}^` : input.staged ? "HEAD" : "",
+        input.revision ? input.path : basePath,
+      ),
+      readCurrent(),
+    ]);
+    const images: { original?: string; content?: string } | undefined =
+      base.image || current.image
+        ? {
+            ...(base.image && { original: base.image }),
+            ...(current.image && { content: current.image }),
+          }
+        : undefined;
+    const hunks =
+      input.revision || images || change?.conflict || (input.staged && change?.index === "R")
         ? []
-        : (await readHunks(root, input.path, input.staged)).hunks.map((h) => h.split("\n")[0]!),
-  };
+        : (await readHunks(root, input.path, input.staged)).hunks.map((h) => h.split("\n")[0]!);
+    if (!input.revision && (await readGitStatus(root)).fingerprint !== status.fingerprint)
+      throw new CompulsiveError(
+        "CONFLICT",
+        "Git state changed while reading the diff. Refresh and try again.",
+      );
+    return {
+      path: input.path,
+      original: base.text,
+      content: current.text,
+      staged: input.staged,
+      fingerprint: status.fingerprint,
+      ...(images && { images }),
+      hunks,
+    };
+  });
 }
 async function readHunks(root: string, path: string, staged: boolean) {
   const raw = (
@@ -203,6 +211,11 @@ export async function projectGitHunk(
         "Git state changed. Reopen the diff before changing a hunk.",
       );
     await resolveProjectPath(manager, input, true);
+    if (input.staged && status.changes.some((c) => c.path === input.path && c.index === "R"))
+      throw new CompulsiveError(
+        "INVALID_INPUT",
+        "Unstage a renamed file as a whole file, not by hunk.",
+      );
     const patch = await readHunks(root, input.path, input.staged);
     const hunk = patch.hunks[input.hunk];
     if (!hunk) throw new CompulsiveError("NOT_FOUND", "This change hunk is no longer available.");

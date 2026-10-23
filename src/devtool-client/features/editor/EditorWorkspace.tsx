@@ -16,6 +16,8 @@ import EditorColumns from "./components/EditorColumns.js";
 import type { EditorNavigation, EditorSidebarMode, EditorViewMode } from "./types.js";
 import { editorViewMode } from "./utils/gitChanges.js";
 import EditorReview from "./components/EditorReview.js";
+import EditorDiffTab from "./components/EditorDiffTab.js";
+import { tabId } from "./utils/editorState.js";
 import { useEditorCommands } from "./hooks/useEditorCommands.js";
 import EditorPalette from "./components/EditorPalette.js";
 import EditorFileDialog from "./components/EditorFileDialog.js";
@@ -55,15 +57,25 @@ export default function EditorWorkspace({
     () => ({ workspaceId: workspace.id, repositoryId }),
     [workspace.id, repositoryId],
   );
-  const editor = useEditorWorkbench(getRpc, scope, params.get("file") ?? "", connected);
+  const urlDiff =
+    params.get("diff") === "staged"
+      ? "staged"
+      : params.get("diff") === "working"
+        ? "working"
+        : undefined;
+  const editor = useEditorWorkbench(getRpc, scope, params.get("file") ?? "", connected, urlDiff);
   const [mode, setSidebarMode] = useState<EditorSidebarMode>("files");
   const viewing = editorViewMode(params);
   const reviewing = viewing === "changes";
   const setView = (view: EditorViewMode) => {
     const next = new URLSearchParams(params);
     next.set("view", view);
+    next.delete("diff");
     if (view === "changes") next.delete("file");
-    else if (editor.tab) next.set("file", editor.tab.path);
+    else if (editor.tab) {
+      next.set("file", editor.tab.path);
+      if (editor.tab.diff) next.set("diff", editor.tab.diff);
+    }
     setParams(next, { replace: true });
   };
   const setMode = (nextMode: EditorSidebarMode) => {
@@ -109,12 +121,23 @@ export default function EditorWorkspace({
   const member = workspace.members.find((m) => m.repositoryId === repositoryId)!;
   const urlFile = params.get("file") ?? "";
   useEffect(() => {
-    if (editor.ready && urlFile && editor.tab?.path !== urlFile) void editor.open(urlFile, true);
-  }, [urlFile, editor.ready]);
+    if (editor.ready && urlFile && (editor.tab?.path !== urlFile || editor.tab.diff !== urlDiff)) {
+      if (urlDiff) editor.openDiff(urlFile, urlDiff === "staged");
+      else void editor.open(urlFile, true);
+    }
+  }, [urlFile, urlDiff, editor.ready]);
   useEffect(() => {
-    if (!reviewing && editor.ready && editor.tab?.path && urlFile !== editor.tab.path)
-      setParams({ view: "files", file: editor.tab.path }, { replace: true });
-  }, [editor.tab?.path, editor.ready, reviewing]);
+    if (
+      !reviewing &&
+      editor.ready &&
+      editor.tab?.path &&
+      (urlFile !== editor.tab.path || urlDiff !== editor.tab.diff)
+    )
+      setParams(
+        { view: "files", file: editor.tab.path, ...(editor.tab.diff && { diff: editor.tab.diff }) },
+        { replace: true },
+      );
+  }, [editor.tab?.path, editor.tab?.diff, editor.ready, reviewing]);
   const open = (path: string, pinned = false) => {
     setParams({ view: "files", file: path }, { replace: true });
     void editor.open(path, pinned);
@@ -157,6 +180,20 @@ export default function EditorWorkspace({
       editor={editor}
       navigation={navigation}
       terminal={terminalInEditor ? terminal : undefined}
+      renderDiff={(tab) => (
+        <EditorDiffTab
+          key={`${scope.workspaceId}:${scope.repositoryId}:${tabId(tab)}`}
+          getRpc={getRpc}
+          scope={scope}
+          path={tab.path}
+          staged={tab.diff === "staged"}
+          git={git}
+          dark={dark}
+          dirty={editor.dirty.some((d) => d.path === tab.path)}
+          report={editor.report}
+          open={() => open(tab.path, true)}
+        />
+      )}
     />
   );
   const editors = (
@@ -266,6 +303,7 @@ export default function EditorWorkspace({
           >
             <EditorReview
               active={reviewing}
+              dirtyPaths={editor.dirty.map((d) => d.path)}
               getRpc={getRpc}
               scope={scope}
               git={git}
@@ -309,6 +347,13 @@ export default function EditorWorkspace({
                   git={git}
                   search={search}
                   open={open}
+                  openDiff={(path, staged) => {
+                    setParams(
+                      { view: "files", file: path, diff: staged ? "staged" : "working" },
+                      { replace: true },
+                    );
+                    editor.openDiff(path, staged);
+                  }}
                   go={go}
                   onFileAction={(a, p) => void fileActions.action(a, p)}
                   dark={dark}
@@ -341,7 +386,9 @@ export default function EditorWorkspace({
         }
         getRpc={getRpc}
         scope={scope}
-        content={editor.tab ? (editor.documents[editor.tab.path]?.content ?? "") : ""}
+        content={
+          editor.tab && !editor.tab.diff ? (editor.documents[editor.tab.path]?.content ?? "") : ""
+        }
         path={editor.tab?.path ?? ""}
         onFile={(path, line) => (line ? go(path, line) : open(path, true))}
         report={editor.report}
@@ -359,6 +406,7 @@ export default function EditorWorkspace({
         <Suspense fallback={<Spin />}>
           <EditorDiff
             {...editor.comparison}
+            kind="disk"
             dark={dark}
             close={() => editor.setComparison(undefined)}
           />

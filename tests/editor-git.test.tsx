@@ -81,14 +81,30 @@ describe("editor Git status", () => {
         setMessage: vi.fn(),
         refresh: vi.fn(async () => status),
         run: vi.fn(async () => {}),
-        inspect: vi.fn(async () => {}),
         hunk: vi.fn(async () => {}),
-        diff: undefined,
-        setDiff: vi.fn(),
-        history: undefined,
-        historyOpen: false,
-        setHistoryOpen: vi.fn(),
-        revision: "",
+        history: {
+          open: false,
+          path: "",
+          commits: [],
+          blame: [],
+          blameTruncated: false,
+          loading: false,
+          error: "",
+          hasMore: false,
+          current: undefined,
+          changed: [],
+          file: "",
+          select: vi.fn(),
+          selectFile: vi.fn(),
+          loadHistory: vi.fn(async () => {}),
+          close: vi.fn(),
+          retry: vi.fn(),
+          detailLoading: false,
+          detailError: undefined,
+          diff: undefined,
+          diffLoading: false,
+          diffError: undefined,
+        },
         loadHistory: vi.fn(async () => {}),
         branchOpen: false,
         setBranchOpen: vi.fn(),
@@ -101,7 +117,7 @@ describe("editor Git status", () => {
       const html = renderToStaticMarkup(
         <LanguageProvider>
           <ConfigProvider>
-            <EditorGit git={git} dark={false} open={vi.fn()} report={vi.fn()} />
+            <EditorGit git={git} dark={false} open={vi.fn()} openDiff={vi.fn()} report={vi.fn()} />
           </ConfigProvider>
         </LanguageProvider>,
       );

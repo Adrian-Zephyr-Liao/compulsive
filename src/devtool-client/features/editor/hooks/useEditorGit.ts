@@ -6,11 +6,11 @@ import type {
   ProjectGitStatus,
   ProjectGitOperation,
   projectGitDiff,
-  projectGitHistory,
 } from "../../../../project/git.js";
 import type { RepositoryBranch } from "../../../../types.js";
 import { useI18n } from "../../../app/i18n.js";
 import { useEditorGitDraft } from "./useEditorGitDraft.js";
+import { useEditorHistory } from "./useEditorHistory.js";
 import EditorDiscardOptions from "../components/EditorDiscardOptions.js";
 export function useEditorGit(
   getRpc: () => Promise<WorkspaceRpc>,
@@ -39,10 +39,7 @@ export function useEditorGit(
     },
     [scope.workspaceId, scope.repositoryId],
   );
-  const [diff, setDiff] = useState<Awaited<ReturnType<typeof projectGitDiff>>>();
-  const [history, setHistory] = useState<Awaited<ReturnType<typeof projectGitHistory>>>();
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [revision, setRevision] = useState("");
+  const history = useEditorHistory(getRpc, scope);
   const [branchOpen, setBranchOpen] = useState(false);
   const [branch, setBranch] = useState("");
   const [branches, setBranches] = useState<RepositoryBranch[]>([]);
@@ -112,7 +109,6 @@ export function useEditorGit(
       });
       setStatus(next);
       if (operation === "commit" || operation === "amend") setMessage("");
-      setDiff(undefined);
       onChanged();
     } catch (e) {
       report(e);
@@ -177,7 +173,6 @@ export function useEditorGit(
       if (id !== discardRequest.current) return;
       setStatus(result.status);
       setRecovery(result.backup?.oid ?? "");
-      setDiff(undefined);
       setMessage("");
       onChanged();
     } catch (error) {
@@ -190,24 +185,12 @@ export function useEditorGit(
       setBusy(false);
     }
   }
-  async function inspect(path: string, staged: boolean, commit = "") {
-    try {
-      setDiff(
-        await (
-          await getRpc()
-        ).call("get-project-git-diff", {
-          ...scope,
-          path,
-          staged,
-          ...(commit ? { revision: commit } : {}),
-        }),
-      );
-    } catch (e) {
-      report(e);
+  async function hunk(diff: Awaited<ReturnType<typeof projectGitDiff>>, index: number) {
+    if (busy || draft.generating) return;
+    if (dirtyPaths.includes(diff.path)) {
+      report(new Error(t("editor.saveBeforeGit")));
+      return;
     }
-  }
-  async function hunk(index: number) {
-    if (!diff || busy || draft.generating) return;
     setBusy(true);
     try {
       setStatus(
@@ -221,32 +204,10 @@ export function useEditorGit(
           fingerprint: diff.fingerprint,
         }),
       );
-      await inspect(diff.path, diff.staged);
       onChanged();
     } catch (e) {
       report(e);
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function loadHistory(offset = 0, commit = "", path = "") {
-    setHistoryOpen(true);
-    setBusy(true);
-    try {
-      const result = await (
-        await getRpc()
-      ).call("get-project-git-history", {
-        ...scope,
-        offset,
-        ...(commit ? { revision: commit } : {}),
-        ...(path ? { path } : {}),
-      });
-      setRevision(commit);
-      setHistory((old) =>
-        offset && old ? { ...result, commits: [...old.commits, ...result.commits] } : result,
-      );
-    } catch (e) {
-      report(e);
+      await refresh().catch(report);
     } finally {
       setBusy(false);
     }
@@ -290,15 +251,9 @@ export function useEditorGit(
     setMessage,
     refresh,
     run,
-    inspect,
     hunk,
-    diff,
-    setDiff,
     history,
-    historyOpen,
-    setHistoryOpen,
-    revision,
-    loadHistory,
+    loadHistory: history.loadHistory,
     branchOpen,
     setBranchOpen,
     branch,

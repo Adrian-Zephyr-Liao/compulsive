@@ -178,6 +178,21 @@ conflict and left untouched.
 Git rejects a branch already checked out by another worktree. Compulsive surfaces this as a conflict
 and does not retry with a different branch.
 
+### Development on the remote default branch
+
+The DevTool's create/clone and add-repository forms allow a per-repository default-branch choice.
+`AddWorkspaceMemberInput.useDefaultBranch` resolves origin's advertised HEAD server-side and uses
+that local branch, creating it with the matching remote upstream only when it does not exist.
+It cannot be combined with an explicit branch, start point or detached mode. Existing local commits
+are not reset to the remote tip, and occupied branches retain Git's normal checkout protection.
+
+`CloneWorkspaceInput.defaultBranchRepositoryIds` selects this behavior alongside independent
+`repositoryBranches` and detached `referenceRepositoryIds`. These IDs must be unique selected
+development repositories and cannot also have an explicit repository branch. All selected defaults
+are fetched before creating the target, and existing clone rollback rules remain in force.
+The resulting member is an ordinary non-detached worktree; no new registry format or CLI flag is
+introduced. Neither path creates a requirement-specific branch for these repositories.
+
 If persistence fails, Compulsive removes the newly created clean worktree through
 `git worktree remove`; inability to roll back is a filesystem failure with both errors attached.
 

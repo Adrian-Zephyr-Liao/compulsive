@@ -155,6 +155,7 @@ export interface CloneWorkspaceInput {
   branchName?: string;
   repositoryBranches?: Array<{ repositoryId: RepositoryId; branch: string }>;
   referenceRepositoryIds?: RepositoryId[];
+  defaultBranchRepositoryIds?: RepositoryId[];
 }
 
 export type AddWorkspaceMemberInput = {
@@ -169,6 +170,7 @@ export type AddWorkspaceMemberInput = {
       createBranch?: boolean;
       startPoint?: string;
       detached?: boolean;
+      useDefaultBranch?: boolean;
     }
 );
 

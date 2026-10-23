@@ -167,6 +167,7 @@ Use it to:
   automatically.
 - Convert a reference checkout to a development worktree and back again when the task changes.
 - Refresh reference checkouts from the remote default branch without creating local branches.
+- Create/clone requirements and add repositories with per-repository default-branch development instead of a task branch. Origin's default is resolved automatically; a branch checked out elsewhere is not forcibly reused.
 - Inspect uncommitted files, conflicts, ahead/behind counts, unpushed commits, and whether a remote
   development branch has been merged into the default branch.
 - Batch-sync development branches with automatic stash, rebase and push; report skipped repositories,

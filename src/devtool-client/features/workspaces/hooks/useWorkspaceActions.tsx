@@ -229,11 +229,14 @@ export function useWorkspaceActions({
             ...(requirement.mode === "clone" ? { sourceWorkspaceId: requirement.sourceId } : {}),
             name,
             repositoryIds: requirement.selectedIds,
-            repositoryBranches: requirement.developmentIds.map((repositoryId) => ({
-              repositoryId,
-              branch: requirement.repositoryBranches[repositoryId]!.trim(),
-            })),
+            repositoryBranches: requirement.developmentIds
+              .filter((id) => !requirement.defaultBranchIds.includes(id))
+              .map((repositoryId) => ({
+                repositoryId,
+                branch: requirement.repositoryBranches[repositoryId]!.trim(),
+              })),
             referenceRepositoryIds: requirement.referenceIds,
+            defaultBranchRepositoryIds: requirement.defaultBranchIds,
           })
         : await rpc.call("create-workspace", { name });
       await refresh(workspace.id);

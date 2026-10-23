@@ -19,7 +19,7 @@ import type { DevtoolWorkspace } from "../../../../../devtool.js";
 import type { RepositoryBranch } from "../../../../../types.js";
 import { useI18n } from "../../../../app/i18n.js";
 import type { RequirementRepository } from "../../types.js";
-import { BranchSelect } from "../BranchSelect.js";
+import { DevelopmentBranchSelect } from "../DevelopmentBranchSelect.js";
 
 const { Paragraph, Text } = Typography;
 
@@ -29,6 +29,7 @@ export interface RequirementDialogProps {
   busy: boolean;
   canSubmit: boolean;
   developmentCount: number;
+  defaultBranchIds: string[];
   error: string;
   mode: "create" | "clone";
   open: boolean;
@@ -43,6 +44,7 @@ export interface RequirementDialogProps {
   targetPath: string;
   workspaces: DevtoolWorkspace[];
   onBranchChange: (repositoryId: string, branch: string) => void;
+  onDefaultBranchChange: (repositoryId: string, value: boolean) => void;
   onClose: () => void;
   onLoadBranches: (repositoryId: string) => void;
   onRepositoryQueryChange: (value: string) => void;
@@ -59,6 +61,7 @@ export function RequirementDialog({
   busy,
   canSubmit,
   developmentCount,
+  defaultBranchIds,
   error,
   mode,
   open,
@@ -73,6 +76,7 @@ export function RequirementDialog({
   targetPath,
   workspaces,
   onBranchChange,
+  onDefaultBranchChange,
   onClose,
   onLoadBranches,
   onRepositoryQueryChange,
@@ -219,7 +223,11 @@ export function RequirementDialog({
                         />
                       </Flex>
                       {selected && !reference && (
-                        <BranchSelect
+                        <DevelopmentBranchSelect
+                          useDefaultBranch={defaultBranchIds.includes(repository.id)}
+                          onDefaultBranchChange={(value) =>
+                            onDefaultBranchChange(repository.id, value)
+                          }
                           ariaLabel={t("requirement.branchLabel", { alias })}
                           branches={branchOptions[repository.id] ?? []}
                           loading={branchLoadingIds.includes(repository.id)}

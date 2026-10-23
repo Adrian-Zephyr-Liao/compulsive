@@ -67,11 +67,23 @@ export async function addWorkspaceMember(
   let member: WorkspaceMember;
   let createdBranch: string | undefined;
   if (input.mode === "worktree") {
-    const explicitBranch = input.branch?.trim();
+    if (
+      input.useDefaultBranch &&
+      (input.branch !== undefined || input.startPoint !== undefined || input.detached)
+    ) {
+      throw new CompulsiveError(
+        "INVALID_INPUT",
+        "Default-branch development cannot specify a branch, start point or detached checkout.",
+      );
+    }
+    const defaultBranch = input.useDefaultBranch
+      ? await fetchOriginDefaultBranch(repository.absolutePath)
+      : undefined;
+    const explicitBranch = defaultBranch?.slice("origin/".length) ?? input.branch?.trim();
     if (input.branch !== undefined && !explicitBranch) {
       throw new CompulsiveError("INVALID_INPUT", "Worktree branch is required.");
     }
-    const startPoint = input.startPoint?.trim();
+    const startPoint = defaultBranch ?? input.startPoint?.trim();
     if (input.startPoint !== undefined && !startPoint) {
       throw new CompulsiveError("INVALID_INPUT", "Worktree start point is required.");
     }
@@ -105,9 +117,13 @@ export async function addWorkspaceMember(
     await ensureManagedWorktreeRoot(repository.absolutePath);
     const existingBranch = !detached && (await localBranchExists(repository.absolutePath, branch));
     const createBranch =
-      !detached && !existingBranch && (explicitBranch === undefined || input.createBranch === true);
+      !detached &&
+      !existingBranch &&
+      (input.useDefaultBranch === true ||
+        explicitBranch === undefined ||
+        input.createBranch === true);
     const remoteBranch = createBranch
-      ? await fetchConfiguredOriginBranch(repository.absolutePath, branch)
+      ? (defaultBranch ?? (await fetchConfiguredOriginBranch(repository.absolutePath, branch)))
       : undefined;
     if (createBranch) createdBranch = branch;
     await addGitWorktree(

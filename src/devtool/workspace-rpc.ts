@@ -44,10 +44,11 @@ export function createWorkspaceFunctions(manager: RepositoryManager) {
         alias: s.optional(s.string()),
         branch: s.optional(s.string()),
         createBranch: s.boolean(),
+        useDefaultBranch: s.optional(s.boolean()),
       }),
     ],
     returns: objectResult<WorkspaceRecord>(),
-    handler: ({ workspaceId, repositoryId, alias, branch, createBranch }) =>
+    handler: ({ workspaceId, repositoryId, alias, branch, createBranch, useDefaultBranch }) =>
       manager.addWorkspaceMember({
         workspaceId: workspaceId as WorkspaceId,
         repositoryId: repositoryId as RepositoryId,
@@ -55,6 +56,7 @@ export function createWorkspaceFunctions(manager: RepositoryManager) {
         ...(alias === undefined ? {} : { alias }),
         ...(branch === undefined ? {} : { branch }),
         createBranch,
+        ...(useDefaultBranch === undefined ? {} : { useDefaultBranch }),
       }),
   });
 
@@ -72,6 +74,7 @@ export function createWorkspaceFunctions(manager: RepositoryManager) {
           s.array(s.object({ repositoryId: s.string(), branch: s.string() })),
         ),
         referenceRepositoryIds: s.optional(s.array(s.string())),
+        defaultBranchRepositoryIds: s.optional(s.array(s.string())),
       }),
     ],
     returns: objectResult<WorkspaceRecord>(),
@@ -82,6 +85,7 @@ export function createWorkspaceFunctions(manager: RepositoryManager) {
       branchName,
       repositoryBranches,
       referenceRepositoryIds,
+      defaultBranchRepositoryIds,
     }) =>
       manager.cloneWorkspace({
         name,
@@ -101,6 +105,9 @@ export function createWorkspaceFunctions(manager: RepositoryManager) {
         ...(referenceRepositoryIds === undefined
           ? {}
           : { referenceRepositoryIds: referenceRepositoryIds as RepositoryId[] }),
+        ...(defaultBranchRepositoryIds === undefined
+          ? {}
+          : { defaultBranchRepositoryIds: defaultBranchRepositoryIds as RepositoryId[] }),
       }),
   });
 
