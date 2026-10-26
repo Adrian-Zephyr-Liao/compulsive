@@ -125,13 +125,23 @@ export async function addWorkspaceMember(
     const remoteBranch = createBranch
       ? (defaultBranch ?? (await fetchConfiguredOriginBranch(repository.absolutePath, branch)))
       : undefined;
+    let worktreeStartPoint = remoteBranch ?? startPoint;
+    if (createBranch && worktreeStartPoint === undefined) {
+      const origin = await runGit(["config", "--get", "remote.origin.url"], {
+        cwd: repository.absolutePath,
+        allowFailure: true,
+      });
+      if (origin.exitCode === 0 && origin.stdout) {
+        worktreeStartPoint = await fetchOriginDefaultBranch(repository.absolutePath);
+      }
+    }
     if (createBranch) createdBranch = branch;
     await addGitWorktree(
       repository.absolutePath,
       worktreePath,
       branch,
       createBranch,
-      remoteBranch ?? startPoint,
+      worktreeStartPoint,
       detached,
       remoteBranch !== undefined,
     );

@@ -268,8 +268,10 @@ cpl workspace add Product worker --branch feature/product-worker --create-branch
 The physical worktree is stored at `<canonical-repository>/.worktrees/<workspace>`. The Workspace
 member is an absolute symbolic link to it. With `--create-branch`, Compulsive fetches and tracks an
 existing same-name branch on `origin`; otherwise it creates a local branch without an upstream from
-the requested start point or current commit. Migration only inherits an upstream for legacy branches
-that do not already have one.
+the requested start point or the freshly fetched origin default branch. Only repositories without
+origin fall back to the current commit. A remote lookup/fetch failure stops creation instead of using
+a stale local baseline. Existing local branches are reused without rewriting their commits or
+upstream. Migration only inherits an upstream for legacy branches that do not already have one.
 
 Common maintenance commands:
 

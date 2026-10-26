@@ -255,7 +255,9 @@ cpl workspace add Product worker \
 
 实体 worktree 保存在 `<canonical-repository>/.worktrees/<workspace>`，Workspace 成员只是指向
 它的绝对软链接。使用 `--create-branch` 时，如果 `origin` 已有同名分支，Compulsive 会先获取
-并跟踪该分支；否则才从指定起点或当前提交创建不带 upstream 的本地分支。
+并跟踪该分支；否则从指定起点或最新获取的远端主分支创建不带 upstream 的本地分支。
+仅未配置 origin 的仓库才回退到当前提交。远端查询或获取失败时会停止创建，不使用过期的
+本地基线。已有本地分支直接复用，不改写其提交或 upstream。
 
 常用维护命令：
 

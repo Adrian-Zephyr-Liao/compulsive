@@ -27,8 +27,9 @@ output and exit codes.
    compatibility and through the library API.
 3. Without `--branch`, the CLI uses a workspace-specific branch. `--create-branch` creates the exact
    named branch, fetching and tracking a same-name `origin` branch when available; otherwise the new
-   local branch has no upstream and starts at the requested start point or current commit. Existing
-   local branches are reused. Legacy migration has its own upstream inheritance rule below.
+   local branch has no upstream and starts at the requested start point or the freshly fetched
+   origin default branch. Only repositories without origin fall back to the current commit.
+   Existing local branches are reused. Legacy migration has its own upstream inheritance rule below.
 4. The default workspace root is a `Workspaces` sibling of the configured repository root. For
    example, `/Users/your-name/Code` produces `/Users/your-name/Workspaces`.
 5. `workspaceRoot` can be set during library initialization or through
@@ -170,13 +171,23 @@ conflict and left untouched.
    the Workspace member path and the repository-owned `<repository>/.worktrees/<workspace>` target.
 2. Run Git with argument arrays only:
    - Existing branch: `git -C <repository> worktree add -- <target> <branch>`.
-   - New branch: `git -C <repository> worktree add -b <branch> -- <target>`.
+   - New independent branch: `git -C <repository> worktree add --no-track -b <branch> -- <target> <start-point>`.
+   - Same-name remote branch: fetch it, then use `--track -b <branch>` with `origin/<branch>`.
 3. Add `/.worktrees/` to the repository-local Git exclude file.
 4. Verify the target, then create an absolute symbolic link at `<workspace>/<alias>`.
 5. Atomically persist the member.
 
 Git rejects a branch already checked out by another worktree. Compulsive surfaces this as a conflict
 and does not retry with a different branch.
+
+For a genuinely new branch without an explicit start point, resolve origin's advertised default
+branch and fetch it before creation. Neither the canonical checkout's HEAD nor a stale remote-tracking
+ref is a valid fallback when origin is configured. Resolution/fetch failure rejects the addition
+without creating a branch, worktree or membership. Repositories without origin retain current-HEAD
+creation. Explicit `--no-track` keeps independent branches free of an upstream even when Git's
+`branch.autoSetupMerge` is enabled. Existing local branches, same-name remote tracking and explicit
+library start points retain their precedence. Switching a branch inside an existing member remains
+a separate operation and retains its current-HEAD creation behavior.
 
 ### Development on the remote default branch
 

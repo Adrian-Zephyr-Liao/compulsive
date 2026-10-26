@@ -103,7 +103,7 @@ export async function addGitWorktree(
   if (detached) {
     arguments_.push("--detach", "--", worktreePath, startPoint ?? branch);
   } else if (createBranch) {
-    if (track) arguments_.push("--track");
+    arguments_.push(track ? "--track" : "--no-track");
     arguments_.push("-b", branch, "--", worktreePath);
     if (startPoint) arguments_.push(startPoint);
   } else arguments_.push("--", worktreePath, branch);
